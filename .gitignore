@@ -1,0 +1,9 @@
+# Operator-local install state — generated during YOUR setup and specific to you.
+# It contains your business details and must never be committed to this public repo.
+setup/
+
+# Never any env/secret files, in any form
+*.env
+.env*
+
+.DS_Store
