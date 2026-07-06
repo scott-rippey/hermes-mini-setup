@@ -1,0 +1,237 @@
+# TEMPLATE — replace {{PLACEHOLDERS}} from setup/answers.md, save to ~/.hermes/scripts/,
+# smoke-test by hand, THEN schedule via templates/launchd/. Placeholder registry: templates/README.md
+
+#!/usr/bin/env python3
+"""Morning brief — daily, emailed agent-account -> operator.
+
+Gathers the operator's calendar (today), recent unread email, and open tasks
+(deterministically, via the google-workspace CLI), then has the agent (GPT-5.5,
+via a headless `hermes -z` call) SYNTHESIZE them into an actual brief — what
+today is about, the priorities, the threads — rendered as a beautiful HTML email
+(synthesis leads; the raw facts sit in a compact reference below). Plus any new
+meeting reports inline. No PDF. Auto-allowed email-to-self cron (operator only).
+Scheduled via launchd `ai.hermes.morning-brief` at 8:00 local.
+"""
+import datetime
+import html
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
+
+HOME = Path.home()
+PY = str(HOME / ".hermes/hermes-agent/venv/bin/python")
+HERMES = str(HOME / ".local/bin/hermes")
+GAPI = str(HOME / ".hermes/skills/productivity/google-workspace/scripts/google_api.py")
+OPERATOR = "{{OPERATOR_EMAIL}}"
+MANIFEST = HOME / ".hermes/skills/productivity/granola-meeting-reports/state/pending-brief.json"
+
+# Palette
+ACCENT = "#4f46e5"   # indigo
+INK = "#1f2937"
+MUTED = "#6b7280"
+FAINT = "#9ca3af"
+CARD = "#f5f6f9"
+LINE = "#e5e7eb"
+FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+
+
+def gapi(*args):
+    """Run google_api.py and return parsed JSON, or None on any failure."""
+    try:
+        r = subprocess.run([PY, GAPI, *args], capture_output=True, text=True, timeout=90)
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    try:
+        return json.loads(r.stdout)
+    except Exception:
+        return None
+
+
+def esc(s):
+    return html.escape(str(s or ""))
+
+
+def fmt_time(iso):
+    if not iso:
+        return ""
+    if "T" not in str(iso):
+        return "all day"
+    try:
+        dt = datetime.datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone()
+        return dt.strftime("%-I:%M %p")
+    except Exception:
+        return str(iso)
+
+
+def gather(now):
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + datetime.timedelta(days=1) - datetime.timedelta(seconds=1)
+    cal = gapi("calendar", "list", "--calendar", OPERATOR,
+               "--start", start.isoformat(), "--end", end.isoformat(), "--max", "20") or []
+    mail = gapi("gmail", "search", "is:unread newer_than:3d", "--max", "10") or []
+    tasks = gapi("tasks", "list", "--max", "30") or []
+    open_tasks = [t for t in tasks if t.get("status") != "completed"]
+    return cal, mail, open_tasks
+
+
+def meetings_block():
+    """Inline HTML for new meeting reports from the manifest (no PDF). ('' if none)."""
+    try:
+        items = json.loads(MANIFEST.read_text())
+        if not isinstance(items, list) or not items:
+            return "", 0
+    except Exception:
+        return "", 0
+    cards = []
+    for m in items:
+        if not isinstance(m, dict):
+            continue
+        # Prefer a pre-rendered HTML report fragment if the skill supplied one; else a summary line.
+        frag = m.get("html")
+        if frag:
+            cards.append(f'<div style="margin:10px 0">{frag}</div>')
+        else:
+            co = f' &middot; <span style="color:{MUTED}">{esc(m.get("company"))}</span>' if m.get("company") else ""
+            cards.append(
+                f'<div style="background:{CARD};border:1px solid {LINE};border-radius:10px;padding:12px 14px;margin:8px 0">'
+                f'<div style="font:600 14px {FONT};color:{INK}">\U0001F4DD {esc(m.get("title") or "(untitled)")}</div>'
+                f'<div style="font:12px {FONT};color:{FAINT};margin-top:2px">{esc(m.get("date"))}{co}</div></div>'
+            )
+    if not cards:
+        return "", 0
+    head = f'<div style="font:700 13px {FONT};letter-spacing:.04em;color:{MUTED};text-transform:uppercase;margin:24px 0 6px">Meeting reports</div>'
+    return head + "".join(cards), len(cards)
+
+
+def digest_text(now, cal, mail, open_tasks, meeting_titles):
+    L = [f"Today is {now.strftime('%A, %B %-d, %Y')}.", ""]
+    L.append("CALENDAR (today):")
+    L += [f"- {fmt_time(e.get('start'))} {e.get('summary') or '(untitled)'}"
+          + (f" @ {e.get('location')}" if e.get("location") else "") for e in cal] or ["- (nothing scheduled)"]
+    L.append("")
+    L.append("UNREAD EMAIL (last 3 days):")
+    L += [f"- {(m.get('from') or '?').split('<')[0].strip()}: {m.get('subject') or '(no subject)'}" for m in mail] or ["- (inbox clear)"]
+    L.append("")
+    L.append("OPEN TASKS:")
+    L += [f"- {t.get('title') or '(untitled)'}" + (f" (due {str(t.get('due'))[:10]})" if t.get("due") else "") for t in open_tasks] or ["- (none)"]
+    if meeting_titles:
+        L.append("")
+        L.append("NEW MEETING REPORTS FILED:")
+        L += [f"- {t}" for t in meeting_titles]
+    return "\n".join(L)
+
+
+def synthesize(digest, now):
+    """GPT-5.5 synthesis via headless hermes. Returns an HTML fragment, or '' on failure."""
+    prompt = (
+        "You are {{AGENT_NAME}}, {{OPERATOR_FIRST_NAME}}'s sharp executive assistant. Write {{OPERATOR_FIRST_NAME}}'s morning brief from the DATA below. "
+        "SYNTHESIZE — do not relist the items. In 2-4 tight sentences say what today is really about: the single "
+        "most important thing, how the calendar/email/tasks connect, any deadline or risk, and what to prep. Then a "
+        "short 'Today's focus' list of 2-4 concrete priorities, most important first. Be specific and reference real "
+        "items; never invent anything not in the DATA. Sharp and useful — no greeting, no filler, no sign-off.\n\n"
+        "Output ONLY an HTML fragment wrapped EXACTLY between <!--BRIEF--> and <!--/BRIEF--> — no <html>/<body>, no "
+        "markdown, no code fences. Use only <p>, <strong>, <ul>, <li>. Do NOT use any tools; write from the DATA only.\n\n"
+        f"DATA:\n{digest}"
+    )
+    env = {**os.environ, "HOME": str(HOME),
+           "PATH": "/opt/homebrew/bin:" + str(HOME / ".local/bin") + ":" + str(HOME / ".hermes/bin") + ":/usr/bin:/bin:/usr/sbin:/sbin"}
+    try:
+        r = subprocess.run([HERMES, "-z", prompt], capture_output=True, text=True, timeout=300, env=env)
+    except Exception:
+        return ""
+    out = r.stdout or ""
+    m = re.search(r"<!--BRIEF-->(.*?)<!--/BRIEF-->", out, re.S)
+    frag = (m.group(1) if m else out).strip()
+    frag = re.sub(r"```html|```", "", frag).strip()
+    # guard: if it doesn't look like HTML, treat as failure (fall back)
+    return frag if ("<p" in frag or "<ul" in frag or "<li" in frag) else ""
+
+
+def details_block(cal, mail, open_tasks):
+    def chip(label, n):
+        return f'<span style="font:600 12px {FONT};color:{MUTED}">{label} <span style="color:{INK}">{n}</span></span>'
+
+    def row(inner):
+        return f'<div style="font:13px {FONT};color:{INK};margin:3px 0">{inner}</div>'
+
+    cal_rows = "".join(row(f'<b>{esc(fmt_time(e.get("start")))}</b> &nbsp; {esc(e.get("summary") or "(untitled)")}'
+                           + (f' <span style="color:{FAINT}">· {esc(e.get("location"))}</span>' if e.get("location") else ""))
+                       for e in cal) or row(f'<span style="color:{FAINT}">Nothing scheduled.</span>')
+    mail_rows = "".join(row(f'<b>{esc((m.get("from") or "?").split("<")[0].strip()[:34])}</b> &mdash; '
+                            f'{esc((m.get("subject") or "(no subject)")[:70])}') for m in mail) \
+        or row(f'<span style="color:{FAINT}">Inbox clear.</span>')
+    task_rows = "".join(row(f'&#9744; {esc(t.get("title") or "(untitled)")}'
+                            + (f' <span style="color:#c0392b">· due {esc(str(t.get("due"))[:10])}</span>' if t.get("due") else ""))
+                        for t in open_tasks) or row(f'<span style="color:{FAINT}">All clear.</span>')
+
+    def grp(title, rows):
+        return (f'<div style="margin:12px 0 0"><div style="font:700 12px {FONT};letter-spacing:.04em;'
+                f'color:{MUTED};text-transform:uppercase;margin-bottom:3px">{title}</div>{rows}</div>')
+
+    return (
+        f'<div style="border-top:1px solid {LINE};margin-top:24px;padding-top:8px">'
+        f'<div style="font:700 13px {FONT};letter-spacing:.04em;color:{FAINT};text-transform:uppercase;margin:6px 0 2px">The details</div>'
+        f'{grp("📅 Calendar — " + str(len(cal)), cal_rows)}'
+        f'{grp("📧 Unread — " + str(len(mail)), mail_rows)}'
+        f'{grp("✅ Tasks — " + str(len(open_tasks)), task_rows)}'
+        f'</div>'
+    )
+
+
+def build_html(now, synthesis_html, meetings_html, cal, mail, open_tasks):
+    if not synthesis_html:
+        synthesis_html = (f'<p style="margin:0;color:{MUTED}">Synthesis unavailable this morning — the details are below.</p>')
+    brief_card = (
+        f'<div style="background:{CARD};border-left:4px solid {ACCENT};border-radius:0 10px 10px 0;'
+        f'padding:16px 18px;font:15px/1.55 {FONT};color:{INK}">{synthesis_html}</div>'
+    )
+    return (
+        f'<div style="max-width:600px;margin:0 auto;padding:4px 2px;font:{FONT}">'
+        f'<div style="font:800 22px {FONT};color:{INK};margin:0 0 1px">Good morning, {{OPERATOR_FIRST_NAME}}</div>'
+        f'<div style="font:13px {FONT};color:{FAINT};margin-bottom:16px">{now.strftime("%A, %B %-d")} &middot; your brief</div>'
+        f'{brief_card}'
+        f'{meetings_html}'
+        f'{details_block(cal, mail, open_tasks)}'
+        f'<div style="color:{FAINT};font:11px {FONT};margin-top:24px;border-top:1px solid {LINE};padding-top:10px">{{AGENT_NAME}} &middot; synthesized by GPT-5.5 &middot; auto-generated</div>'
+        f'</div>'
+    )
+
+
+def main():
+    now = datetime.datetime.now().astimezone()
+    cal, mail, open_tasks = gather(now)
+    meetings_html, n_meet = meetings_block()
+    # meeting titles for the digest (so synthesis can reference follow-ups)
+    try:
+        mtitles = [m.get("title") for m in json.loads(MANIFEST.read_text())] if n_meet else []
+    except Exception:
+        mtitles = []
+
+    digest = digest_text(now, cal, mail, open_tasks, mtitles)
+    synthesis_html = synthesize(digest, now)
+    body = build_html(now, synthesis_html, meetings_html, cal, mail, open_tasks)
+    subject = f'☀️ Morning Brief — {now.strftime("%a %b %-d")}'
+
+    send = subprocess.run(
+        [PY, GAPI, "gmail", "send", "--to", OPERATOR, "--subject", subject, "--body", body, "--html"],
+        capture_output=True, text=True, timeout=120,
+    )
+    stamp = now.strftime("%Y-%m-%d %H:%M %Z")
+    if send.returncode == 0:
+        if n_meet:
+            try:
+                MANIFEST.write_text("[]")  # consumed
+            except Exception:
+                pass
+        print(f"[{stamp}] sent brief: {len(cal)} events, {len(mail)} unread, {len(open_tasks)} tasks, "
+              f"{n_meet} meeting(s), synthesis={'yes' if synthesis_html else 'FALLBACK'}")
+    else:
+        print(f"[{stamp}] SEND FAILED: {send.stderr.strip() or send.stdout.strip()}")
+
+
+if __name__ == "__main__":
+    main()

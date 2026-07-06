@@ -1,0 +1,436 @@
+# TEMPLATE — replace {{PLACEHOLDERS}} from setup/answers.md, save to ~/.hermes/scripts/,
+# smoke-test by hand, THEN schedule via templates/launchd/. Placeholder registry: templates/README.md
+
+#!/usr/bin/env python3
+"""Meeting prep — a sharp pre-meeting brief, emailed agent-account -> operator ~2h out.
+
+Poll-based (NOT a webhook — Google Calendar push needs a public endpoint, which
+conflicts with the Slack-only/no-exposure setup; a poll gives the same outcome,
+no exposure, and handles reschedules/cancellations automatically by re-reading
+the live calendar each pass). Every ~15 min: find meetings starting within the
+next ~2h that haven't been prepped yet and have a real counterpart, resolve that
+person -> the KB (company, role, past meetings, filed docs) + recent email with
+them, have GPT-5.5 synthesize a prep (who, the relationship, what's open, things
+to raise), and email it. One prep per meeting (dedup ledger). Auto-allowed
+email-to-self cron (operator only).
+
+Scheduled via launchd `ai.hermes.meeting-prep` every ~15 min.
+Smoke-test:  python meeting_prep.py [--dry-run] [--window-min N]
+"""
+import datetime
+import html
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+HOME = Path.home()
+PY = str(HOME / ".hermes/hermes-agent/venv/bin/python")
+HERMES = str(HOME / ".local/bin/hermes")
+GAPI = str(HOME / ".hermes/skills/productivity/google-workspace/scripts/google_api.py")
+PSQL = "/opt/homebrew/bin/psql"
+PGDATABASE = "{{KB_DB_NAME}}"
+OPERATOR = "{{OPERATOR_EMAIL}}"
+AGENT = "{{AGENT_EMAIL}}"
+STATE_FILE = HOME / ".hermes" / "scripts" / ".meeting_prep_state.json"
+LOGS = HOME / ".hermes" / "logs"
+PREP_WINDOW_MIN = 120  # prep meetings starting within the next 2h
+
+# --- travel (2026-07-06): "leave by" when the invite carries a physical address ---
+MAPS = str(HOME / ".hermes/skills/productivity/maps/scripts/maps_client.py")
+HOME_ADDR = "{{HOME_ADDRESS}}"
+TRAVEL_CUSHION_MIN = 10  # parking / walk-in buffer on top of the drive
+# Location strings that mean "not a physical address" -> no travel block (operator rule:
+# no address in the invite = he didn't want travel info / it's a remote meeting).
+VIRTUAL_LOC = ("http", "zoom.", "meet.google", "teams.microsoft", "webex.", "hangout")
+
+ACCENT = "#0f766e"   # teal (proposals/prep accent, distinct from the brief's indigo)
+INK = "#1f2937"
+MUTED = "#6b7280"
+FAINT = "#9ca3af"
+CARD = "#f5f6f9"
+LINE = "#e5e7eb"
+FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+
+ROOM = "resource.calendar.google.com"
+
+
+def log(msg):
+    print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M %Z')}] {msg}", flush=True)
+
+
+def gapi(*args, timeout=90):
+    try:
+        r = subprocess.run([PY, GAPI, *args], capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    try:
+        return json.loads(r.stdout)
+    except Exception:
+        return None
+
+
+def pg(query, **params):
+    """Run a parameterized psql query (safe quoting via :'var'); rows split on US (\\x1f).
+    Query goes via STDIN, not -c: psql only expands :'var' variables for stdin/-f input."""
+    # -R sets the record (row) separator to US (\x1e) so newlines INSIDE a field
+    # (markdown doc snippets) don't break row parsing; -F sets the field separator.
+    cmd = [PSQL, "-d", PGDATABASE, "-At", "-F", "\x1f", "-R", "\x1e"]
+    for k, v in params.items():
+        cmd += ["-v", f"{k}={v}"]
+    try:
+        r = subprocess.run(cmd, input=query, capture_output=True, text=True, timeout=30)
+    except Exception:
+        return []
+    return [row.split("\x1f") for row in r.stdout.split("\x1e") if row.strip()]
+
+
+def esc(s):
+    return html.escape(str(s or ""))
+
+
+def fmt_time(iso):
+    try:
+        dt = datetime.datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone()
+        return dt.strftime("%-I:%M %p")
+    except Exception:
+        return str(iso)
+
+
+# ----------------------------------------------------------------------------- selection
+
+def counterparts(event):
+    """External attendees worth prepping for (not the operator, the agent, rooms, or declined-by-them)."""
+    out = []
+    for a in event.get("attendees", []):
+        email = (a.get("email") or "").lower()
+        if not email or a.get("self") or email in (OPERATOR, AGENT) or ROOM in email:
+            continue
+        if a.get("responseStatus") == "declined":
+            continue
+        out.append({"email": email, "name": a.get("displayName") or email.split("@")[0]})
+    return out
+
+
+def my_status(event):
+    for a in event.get("attendees", []):
+        if a.get("self") or (a.get("email") or "").lower() == OPERATOR:
+            return a.get("responseStatus", "")
+    return ""
+
+
+# ----------------------------------------------------------------------------- KB + email context
+
+def kb_context(cp):
+    """Resolve a counterpart -> KB facts. Returns a dict (empty-ish if not found)."""
+    rows = pg("SELECT id, name FROM people WHERE lower(email)=lower(:'em') LIMIT 1", em=cp["email"])
+    if not rows:
+        rows = pg("SELECT id, name FROM people WHERE lower(name)=lower(:'nm') "
+                  "OR :'nm' ILIKE '%'||name||'%' LIMIT 1", nm=cp["name"])
+    if not rows:
+        return {"found": False, "name": cp["name"], "email": cp["email"]}
+    pid, pname = rows[0][0], rows[0][1]
+    companies = pg("SELECT c.name, coalesce(cp.role,'') FROM customer_people cp "
+                   "JOIN customers c ON c.id=cp.customer_id WHERE cp.person_id=:'pid' "
+                   "ORDER BY cp.is_primary DESC", pid=pid)
+    meetings = pg("SELECT title, coalesce(to_char(meeting_date,'YYYY-MM-DD'),''), coalesce(meeting_type,'') "
+                  "FROM meetings WHERE person_id=:'pid' ORDER BY meeting_date DESC NULLS LAST LIMIT 4", pid=pid)
+    docs = pg("SELECT path, left(content, 500) FROM memory_documents "
+              "WHERE person_id=:'pid' OR customer_id IN (SELECT customer_id FROM customer_people WHERE person_id=:'pid') "
+              "ORDER BY updated_at DESC LIMIT 5", pid=pid)
+    return {"found": True, "name": pname, "email": cp["email"],
+            "companies": companies, "meetings": meetings, "docs": docs}
+
+
+def email_context(cp):
+    msgs = gapi("gmail", "search", f"from:{cp['email']} OR to:{cp['email']} newer_than:60d", "--max", "5") or []
+    return [{"subject": m.get("subject", ""), "date": str(m.get("date", ""))[:16],
+             "snippet": (m.get("snippet", "") or "")[:160]} for m in msgs]
+
+
+# ----------------------------------------------------------------------------- travel
+
+def _env_key(name):
+    try:
+        m = re.search(rf"^{name}=(.+)$", (HOME / ".hermes/.env").read_text(), re.M)
+        return m.group(1).strip() if m else ""
+    except OSError:
+        return ""
+
+
+def _google_route(loc, departure_dt):
+    """One traffic-aware Routes API call. Returns (secs, meters); raises on any problem."""
+    import urllib.request
+    key = _env_key("GOOGLE_ROUTES_API_KEY")
+    if not key:
+        raise RuntimeError("no GOOGLE_ROUTES_API_KEY")
+    body = json.dumps({
+        "origin": {"address": HOME_ADDR},
+        "destination": {"address": loc},
+        "travelMode": "DRIVE",
+        "routingPreference": "TRAFFIC_AWARE",
+        "departureTime": departure_dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }).encode()
+    req = urllib.request.Request(
+        "https://routes.googleapis.com/directions/v2:computeRoutes", data=body,
+        headers={"Content-Type": "application/json", "X-Goog-Api-Key": key,
+                 "X-Goog-FieldMask": "routes.duration,routes.distanceMeters"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        d = json.loads(r.read().decode())
+    route = d["routes"][0]
+    return int(str(route["duration"]).rstrip("s").split(".")[0]), int(route.get("distanceMeters", 0))
+
+
+def _osm_route(loc):
+    """Fallback: typical drive time via the maps skill (OSM/OSRM). Returns (secs, meters)."""
+    for attempt in (1, 2):  # public OSM/OSRM endpoints hiccup occasionally — one retry
+        try:
+            # PY (venv 3.11), NOT /usr/bin/python3 — Apple's system python SSL-handshake-fails on OSM hosts
+            r = subprocess.run([PY, MAPS, "distance", HOME_ADDR, "--to", loc,
+                                "--mode", "driving"], capture_output=True, text=True, timeout=60)
+            d = json.loads(r.stdout)
+            return int(d["duration_seconds"]), int(d.get("distance_m", 0))
+        except Exception:
+            if attempt == 2:
+                raise
+            import time
+            time.sleep(2)
+
+
+def travel_info(event):
+    """Drive time HOME -> the invite's physical address, else None.
+    Fires ONLY when the invite location is a real address (URLs/virtual rooms skip).
+    Primary: Google Routes TRAFFIC_AWARE, two-pass predictive (<=2 calls per prepped
+    meeting; ~10 addressed meetings/mo << the 5,000 free Pro-SKU calls — operator decision: traffic accuracy is the point). Fallback: OSM typical time."""
+    loc = (event.get("location") or "").strip()
+    if not loc or any(t in loc.lower() for t in VIRTUAL_LOC):
+        return None
+    try:
+        start = datetime.datetime.fromisoformat(str(event.get("start")).replace("Z", "+00:00")).astimezone()
+    except Exception:
+        return None
+    now2 = datetime.datetime.now().astimezone() + datetime.timedelta(minutes=2)
+    cushion = datetime.timedelta(minutes=TRAVEL_CUSHION_MIN)
+    try:
+        d1, _ = _google_route(loc, now2)                    # pass 1: rough duration now
+        dep = max(start - datetime.timedelta(seconds=d1) - cushion, now2)
+        secs, meters = _google_route(loc, dep)              # pass 2: predictive at actual departure
+        source = "google-traffic"
+    except Exception as e:
+        log(f"google route unavailable ({str(e)[:80]}) — OSM fallback for '{loc[:50]}'")
+        try:
+            secs, meters = _osm_route(loc)
+            source = "osm-typical"
+        except Exception as e2:
+            log(f"travel lookup failed for '{loc[:60]}': {e2}")
+            return None
+    leave = start - datetime.timedelta(seconds=secs) - cushion
+    return {"minutes": round(secs / 60), "miles": round(meters / 1609.344, 1),
+            "leave_by": leave, "dest": loc, "source": source}
+
+
+# ----------------------------------------------------------------------------- synthesis
+
+def digest(event, cps, kbs, emails, travel=None):
+    L = [f"MEETING: {event.get('summary') or '(untitled)'}",
+         f"WHEN: {fmt_time(event.get('start'))} today",
+         f"WHERE: {event.get('location') or event.get('hangoutLink') or '(not specified)'}"]
+    if travel:
+        traffic_note = ("live + predicted traffic, Google" if travel.get("source") == "google-traffic"
+                        else "typical traffic, no live data")
+        L.append(f"TRAVEL: ~{travel['minutes']} min drive from home ({travel['miles']} mi); "
+                 f"leave by {travel['leave_by'].strftime('%-I:%M %p')} "
+                 f"(incl. {TRAVEL_CUSHION_MIN}-min buffer; {traffic_note})")
+    if event.get("description"):
+        L.append(f"INVITE NOTES: {event['description'][:400]}")
+    for cp, kb in zip(cps, kbs):
+        L.append("")
+        L.append(f"COUNTERPART: {cp['name']} <{cp['email']}>")
+        if kb.get("found"):
+            comps = "; ".join(f"{c[0]}" + (f" ({c[1]})" if c[1] else "") for c in kb.get("companies", []))
+            L.append(f"  In KB. Company/role: {comps or '(none linked)'}")
+            if kb.get("meetings"):
+                L.append("  Past meetings: " + "; ".join(
+                    f"{m[0]} [{m[1]}]" for m in kb["meetings"]))
+            for d in kb.get("docs", []):
+                if len(d) >= 2:
+                    L.append(f"  Doc — {d[0]}: {' '.join(d[1].split())[:300]}")
+        else:
+            L.append("  NOT in the KB (no record yet — may be a new contact/prospect).")
+    if any(emails.values()):
+        L.append("")
+        L.append("RECENT EMAIL WITH THEM:")
+        for cp in cps:
+            for m in emails.get(cp["email"], []):
+                L.append(f"  - [{m['date']}] {m['subject']} — {m['snippet']}")
+    return "\n".join(L)
+
+
+def synthesize(dig):
+    prompt = (
+        "You are {{AGENT_NAME}}, prepping {{OPERATOR_FIRST_NAME}} right before a meeting. From the DATA below, write a sharp, "
+        "useful pre-meeting brief so they can walk in ready. In 2-4 tight sentences: who they're meeting and the "
+        "relationship/context, what's open or pending between them, and the thread of any recent email. Then a "
+        "short 'Walk in ready' list of 2-4 concrete things to remember, raise, or ask — most important first. "
+        "Reference real items from the DATA; NEVER invent names, facts, or history. If they're not in the KB, say "
+        "so plainly and focus on the email + invite. No greeting, no filler, no sign-off.\n\n"
+        "Output ONLY an HTML fragment wrapped EXACTLY between <!--PREP--> and <!--/PREP--> — no <html>/<body>, no "
+        "markdown, no code fences. Use only <p>, <strong>, <ul>, <li>. Do NOT use any tools; write from the DATA only.\n\n"
+        f"DATA:\n{dig}"
+    )
+    env = {**os.environ, "HOME": str(HOME),
+           "PATH": "/opt/homebrew/bin:" + str(HOME / ".local/bin") + ":" + str(HOME / ".hermes/bin") + ":/usr/bin:/bin:/usr/sbin:/sbin"}
+    try:
+        r = subprocess.run([HERMES, "-z", prompt], capture_output=True, text=True, timeout=300, env=env)
+    except Exception:
+        return ""
+    out = r.stdout or ""
+    m = re.search(r"<!--PREP-->(.*?)<!--/PREP-->", out, re.S)
+    frag = (m.group(1) if m else out).strip()
+    frag = re.sub(r"```html|```", "", frag).strip()
+    return frag if ("<p" in frag or "<ul" in frag or "<li" in frag) else ""
+
+
+# ----------------------------------------------------------------------------- render
+
+def build_html(event, cps, kbs, prep_html, travel=None):
+    when = fmt_time(event.get("start"))
+    names = ", ".join(c["name"] for c in cps)
+    join = event.get("hangoutLink") or ""
+    join_html = (f'<a href="{esc(join)}" style="color:{ACCENT};font-weight:600">Join link</a> &middot; '
+                 if join else "")
+    loc = event.get("location") or ""
+
+    travel_card = ""
+    if travel:
+        src_label = ("Live + predicted traffic (Google Routes)."
+                     if travel.get("source") == "google-traffic"
+                     else "Typical drive time (OpenStreetMap) — no live traffic data.")
+        travel_card = (
+            f'<div style="background:#ecfdf5;border-left:4px solid #059669;border-radius:0 10px 10px 0;'
+            f'padding:12px 16px;margin-bottom:10px;font:14px/1.5 {FONT};color:{INK}">'
+            f'🚗 <b>Leave by {travel["leave_by"].strftime("%-I:%M %p")}</b> — '
+            f'~{travel["minutes"]} min drive ({travel["miles"]} mi) from home '
+            f'+ {TRAVEL_CUSHION_MIN}-min buffer'
+            f'<div style="color:{MUTED};font-size:12px;margin-top:2px">{src_label}</div></div>')
+
+    if not prep_html:
+        prep_html = f'<p style="margin:0;color:{MUTED}">Couldn\'t synthesize a prep — the facts I have are below.</p>'
+    prep_card = (f'<div style="background:{CARD};border-left:4px solid {ACCENT};border-radius:0 10px 10px 0;'
+                 f'padding:16px 18px;font:15px/1.55 {FONT};color:{INK}">{prep_html}</div>')
+
+    # compact "what I have" facts
+    facts = []
+    for cp, kb in zip(cps, kbs):
+        if kb.get("found"):
+            comps = "; ".join(f"{esc(c[0])}" + (f" · {esc(c[1])}" if c[1] else "") for c in kb.get("companies", []))
+            facts.append(f'<div style="margin:4px 0"><b>{esc(kb["name"])}</b> '
+                         f'<span style="color:{FAINT}">{esc(cp["email"])}</span><br>'
+                         f'<span style="color:{MUTED};font-size:13px">{comps or "no company linked"}</span>'
+                         + (f'<br><span style="color:{FAINT};font-size:12px">Last: '
+                            f'{esc(kb["meetings"][0][0])} ({esc(kb["meetings"][0][1])})</span>' if kb.get("meetings") else "")
+                         + '</div>')
+        else:
+            facts.append(f'<div style="margin:4px 0"><b>{esc(cp["name"])}</b> '
+                         f'<span style="color:{FAINT}">{esc(cp["email"])}</span><br>'
+                         f'<span style="color:#b45309;font-size:13px">Not in your KB yet — consider onboarding.</span></div>')
+    facts_html = (f'<div style="border-top:1px solid {LINE};margin-top:20px;padding-top:8px">'
+                  f'<div style="font:700 12px {FONT};letter-spacing:.04em;color:{FAINT};text-transform:uppercase;margin-bottom:4px">Who &amp; what I have</div>'
+                  f'{"".join(facts)}</div>')
+
+    return (
+        f'<div style="max-width:600px;margin:0 auto;padding:4px 2px;font:{FONT}">'
+        f'<div style="font:800 20px {FONT};color:{INK};margin:0 0 1px">🧭 Meeting prep</div>'
+        f'<div style="font:14px {FONT};color:{INK};margin:6px 0 2px"><b>{esc(event.get("summary") or "(untitled)")}</b></div>'
+        f'<div style="font:13px {FONT};color:{FAINT};margin-bottom:14px">{esc(when)} &middot; with {esc(names)} &middot; {join_html}{esc(loc)}</div>'
+        f'{travel_card}'
+        f'{prep_card}'
+        f'{facts_html}'
+        f'<div style="color:{FAINT};font:11px {FONT};margin-top:22px;border-top:1px solid {LINE};padding-top:10px">{{AGENT_NAME}} &middot; synthesized by GPT-5.5 &middot; ~2h before</div>'
+        f'</div>'
+    )
+
+
+# ----------------------------------------------------------------------------- main
+
+def load_ledger():
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def save_ledger(led):
+    # prune entries for events that started > 1 day ago (by sent time)
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=1)).isoformat()
+    led = {k: v for k, v in led.items() if v > cutoff}
+    STATE_FILE.write_text(json.dumps(led, indent=2))
+
+
+def main(dry_run=False, window_min=PREP_WINDOW_MIN):
+    LOGS.mkdir(parents=True, exist_ok=True)
+    now = datetime.datetime.now().astimezone()
+    end = now + datetime.timedelta(minutes=window_min)
+    events = gapi("calendar", "list", "--calendar", OPERATOR,
+                  "--start", now.isoformat(), "--end", end.isoformat(), "--max", "20") or []
+    ledger = load_ledger()
+    prepped = 0
+
+    for ev in events:
+        eid = ev.get("id")
+        start = ev.get("start", "")
+        if not eid or "T" not in str(start):       # skip all-day
+            continue
+        if ev.get("status") == "cancelled":
+            continue
+        if my_status(ev) == "declined":
+            continue
+        cps = counterparts(ev)
+        if not cps:                                 # no real counterpart -> nothing to prep
+            continue
+        if eid in ledger and not dry_run:
+            continue
+
+        kbs = [kb_context(c) for c in cps]
+        emails = {c["email"]: email_context(c) for c in cps}
+        travel = travel_info(ev)
+        dig = digest(ev, cps, kbs, emails, travel)
+        prep_html = synthesize(dig)
+        body = build_html(ev, cps, kbs, prep_html, travel)
+        subject = f"🧭 Prep: {ev.get('summary') or 'meeting'} at {fmt_time(start)}"
+
+        if dry_run:
+            out = LOGS / "meeting-prep-preview.html"
+            out.write_text(body)
+            log(f"[dry-run] {ev.get('summary')} @ {fmt_time(start)} | counterpart={cps[0]['name']} "
+                f"| kb={'yes' if kbs[0].get('found') else 'no'} | synth={'yes' if prep_html else 'FALLBACK'} "
+                f"| travel={'leave by ' + travel['leave_by'].strftime('%-I:%M %p') if travel else 'n/a'} "
+                f"-> preview {out}")
+            prepped += 1
+            continue
+
+        send = subprocess.run(
+            [PY, GAPI, "gmail", "send", "--to", OPERATOR, "--subject", subject, "--body", body, "--html"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if send.returncode == 0:
+            ledger[eid] = now.isoformat()
+            prepped += 1
+            log(f"sent prep: {ev.get('summary')} @ {fmt_time(start)} (with {cps[0]['name']}, "
+                f"synth={'yes' if prep_html else 'fallback'})")
+        else:
+            log(f"SEND FAILED for {ev.get('summary')}: {send.stderr[-200:]}")
+
+    if not dry_run:
+        save_ledger(ledger)
+    if prepped == 0:
+        log(f"no meetings to prep in the next {window_min}m ({len(events)} event(s) scanned)")
+
+
+if __name__ == "__main__":
+    main(dry_run="--dry-run" in sys.argv,
+         window_min=int(next((a.split("=")[1] for a in sys.argv if a.startswith("--window-min=")), PREP_WINDOW_MIN)))

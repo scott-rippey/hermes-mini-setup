@@ -1,0 +1,629 @@
+# TEMPLATE — replace {{PLACEHOLDERS}} from setup/answers.md, save to ~/.hermes/scripts/,
+# smoke-test by hand, THEN schedule via templates/launchd/. Placeholder registry: templates/README.md
+
+#!/usr/bin/env python3
+"""{{AGENT_NAME}} ops digest — daily internal/technical report, emailed agent-account -> operator.
+
+Deterministic (no LLM — raw facts are the point, unlike the morning brief's
+synthesis). Reports the last 24h of background activity:
+
+  * Cron health   — did each launchd job run + succeed (backup / meeting-reports /
+                    github-docs-sync / morning-brief / meeting-prep / call reports /
+                    yesterday's digest), from their logs, + the gateway process
+  * Agent activity— sessions, tool calls, tokens, est. cost from state.db (by
+                    source + model)
+  * KB growth     — new docs / meetings / customers / people in 24h (Postgres)
+  * GitHub sync   — last run's synced / pruned totals
+  * Backup        — last bundle size + age
+  * Memory stores — USER.md / MEMORY.md §-round-trip + size vs config limits
+                    (Hermes only checks at WRITE time and tells nobody — a jammed
+                    store surfaces here instead of recycling as chat errors)
+  * Voice (Bland) — prepaid balance + total calls, so credit never dies mid-call
+
+Rendered as a compact HTML email. Auto-allowed email-to-self cron (operator only).
+Scheduled via launchd `ai.hermes.ops-digest` ~8:10am ET (just after the brief).
+Smoke-test:  python ops_digest.py            (add --dry-run to skip the send)
+"""
+import datetime
+import html
+import json
+import re
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+
+HOME = Path.home()
+PY = str(HOME / ".hermes/hermes-agent/venv/bin/python")
+GAPI = str(HOME / ".hermes/skills/productivity/google-workspace/scripts/google_api.py")
+LOGS = HOME / ".hermes" / "logs"
+BACKUP_DIR = HOME / "backups"
+STATE_DB = str(HOME / ".hermes" / "state.db")
+SQLITE3 = "/usr/bin/sqlite3"
+PSQL = "/opt/homebrew/bin/psql"
+PGDATABASE = "{{KB_DB_NAME}}"
+OPERATOR = "{{OPERATOR_EMAIL}}"
+MEMORIES = HOME / ".hermes" / "memories"
+ENTRY_DELIM = "\n§\n"  # memory_tool's entry delimiter — mirror of its drift check
+
+# Palette (matches the morning brief).
+ACCENT = "#4f46e5"
+OKC = "#16a34a"
+BADC = "#dc2626"
+WARN = "#d97706"
+INK = "#1f2937"
+MUTED = "#6b7280"
+FAINT = "#9ca3af"
+CARD = "#f5f6f9"
+LINE = "#e5e7eb"
+FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+
+
+def sqlite(q):
+    r = subprocess.run([SQLITE3, "-noheader", "-separator", "|", STATE_DB, q],
+                       capture_output=True, text=True)
+    return [ln.split("|") for ln in r.stdout.strip().splitlines() if ln.strip()]
+
+
+def pg(q):
+    r = subprocess.run([PSQL, "-d", PGDATABASE, "-At", "-F", "|", "-c", q],
+                       capture_output=True, text=True)
+    return [ln.split("|") for ln in r.stdout.strip().splitlines() if ln.strip()]
+
+
+def fmt_int(n):
+    try:
+        return f"{int(n):,}"
+    except (ValueError, TypeError):
+        return str(n)
+
+
+def human_age(dt):
+    secs = (datetime.datetime.now() - dt).total_seconds()
+    if secs < 3600:
+        return f"{int(secs // 60)}m ago"
+    if secs < 86400:
+        return f"{int(secs // 3600)}h ago"
+    return f"{int(secs // 86400)}d ago"
+
+
+# ----------------------------------------------------------------------------- cron health
+
+# label, logfile, schedule, parser -> (status: ok|fail|none, detail, when|None)
+def _last_run_when(path):
+    try:
+        return datetime.datetime.fromtimestamp(path.stat().st_mtime)
+    except OSError:
+        return None
+
+
+def _tail(path, n=40):
+    try:
+        return path.read_text(errors="replace").splitlines()[-n:]
+    except OSError:
+        return []
+
+
+def parse_backup(path):
+    lines = _tail(path)
+    text = "\n".join(lines)
+    if not lines:
+        return "none", "no run yet (first launchd run tonight 3:15a)", None
+    if re.search(r"=== backup \d{8}-\d{6} OK ===", text):
+        return "ok", "bundle encrypted + uploaded to Drive", _last_run_when(path)
+    if "FAILED" in text:
+        fail = next((l for l in reversed(lines) if "FAILED" in l), "failed")
+        return "fail", fail.strip()[:80], _last_run_when(path)
+    return "fail", "ran, no OK marker", _last_run_when(path)
+
+
+def parse_brief(path):
+    lines = _tail(path)
+    if not lines:
+        return "none", "no run yet", None
+    last = lines[-1]
+    m = re.search(r"sent brief: (.+)$", last)
+    if m:
+        return "ok", m.group(1), _last_run_when(path)
+    if re.search(r"error|traceback|failed", "\n".join(lines), re.I):
+        return "fail", last.strip()[:80], _last_run_when(path)
+    return "ok", last.strip()[:80], _last_run_when(path)
+
+
+def parse_meetings(path):
+    lines = _tail(path)
+    if not lines:
+        return "none", "no run yet (first launchd run tonight 10p)", None
+    text = "\n".join(lines)
+    if re.search(r"error|traceback|failed", text, re.I):
+        last = next((l for l in reversed(lines) if l.strip()), "")
+        return "fail", last.strip()[:80], _last_run_when(path)
+    last = next((l for l in reversed(lines) if l.strip()), "ran")
+    return "ok", last.strip()[:80], _last_run_when(path)
+
+
+def parse_sync(path):
+    lines = _tail(path, 60)
+    if not lines:
+        return "none", "no run yet", None, (0, 0, 0)
+    done = re.findall(r"done — (\d+) synced, (\d+) unchanged, (\d+) pruned", "\n".join(lines))
+    if not done:
+        return "fail", "no completion lines", _last_run_when(path), (0, 0, 0)
+    # last run = the trailing block (one line per app)
+    apps = len(done)
+    synced = sum(int(s) for s, _, _ in done)
+    pruned = sum(int(p) for _, _, p in done)
+    errs = len(re.findall(r"error|failed|traceback", "\n".join(lines), re.I))
+    status = "fail" if errs else "ok"
+    detail = f"{apps} apps · {synced} synced · {pruned} pruned"
+    return status, detail, _last_run_when(path), (apps, synced, pruned)
+
+
+def parse_prep(path):
+    """Every-15-min poller: staleness IS the failure signal."""
+    lines = _tail(path, 5)
+    if not lines:
+        return "none", "no run yet", None
+    when = _last_run_when(path)
+    if when and (datetime.datetime.now() - when).total_seconds() > 35 * 60:
+        return "fail", f"poller stale — no run since {human_age(when)}", when
+    last = lines[-1].strip()
+    if re.search(r"error|traceback|failed", last, re.I):
+        return "fail", last[:80], when
+    return "ok", last.split("] ", 1)[-1][:80], when
+
+
+def parse_callreports(path):
+    """Event-driven (per call), not scheduled — count the last 24h of outcomes."""
+    lines = _tail(path, 200)
+    if not lines:
+        return "none", "no calls yet", None
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=1)
+    sent = errs = 0
+    for ln in lines:
+        m = re.match(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", ln)
+        if not m:
+            continue
+        try:
+            ts = datetime.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+        if ts < cutoff:
+            continue
+        if "report emailed" in ln:
+            sent += 1
+        elif re.search(r"timed out|failed|error|traceback", ln, re.I):
+            errs += 1
+    when = _last_run_when(path)
+    if errs:
+        return "fail", f"{sent} report(s) emailed · {errs} error line(s)", when
+    if not sent:
+        return "ok", "no calls in 24h", when
+    return "ok", f"{sent} call report(s) emailed", when
+
+
+def parse_opsdigest(path):
+    lines = _tail(path, 5)
+    if not lines:
+        return "none", "no prior run", None
+    last = lines[-1].strip()
+    if "SEND FAILED" in last:
+        return "fail", last[:80], _last_run_when(path)
+    if "sent ops digest" in last:
+        return "ok", last.split("] ", 1)[-1][:80], _last_run_when(path)
+    return "ok", last[:80], _last_run_when(path)
+
+
+def docs_repo_row():
+    """~/hermes-setup → private hermes-backup push health. Unpushed or uncommitted
+    build docs are a DR gap; surface it daily (unpushed work must
+    surface daily, not silently accumulate)."""
+    repo = str(HOME / "{{DOCS_REPO_DIR}}")
+    git = "/usr/bin/git"
+    def g(*args):
+        r = subprocess.run([git, "-C", repo, *args], capture_output=True, text=True)
+        return r.returncode, r.stdout.strip()
+    rc, _ = g("rev-parse", "--git-dir")
+    if rc != 0:
+        return ("Docs repo push", "nightly", "fail", "~/hermes-setup is not a git repo?!", None)
+    _, ct = g("log", "-1", "--format=%ct")
+    when = datetime.datetime.fromtimestamp(int(ct)) if ct.isdigit() else None
+    _, porcelain = g("status", "--porcelain")
+    dirty = len([ln for ln in porcelain.splitlines() if ln.strip()])
+    rc_up, _ = g("rev-parse", "--abbrev-ref", "@{u}")
+    if rc_up != 0:
+        return ("Docs repo push", "nightly", "fail",
+                f"NEVER PUSHED — remote empty, PAT not in keychain · {dirty} uncommitted file(s)", when)
+    _, ahead = g("rev-list", "--count", "@{u}..HEAD")
+    ahead = int(ahead) if ahead.isdigit() else 0
+    if ahead or dirty:
+        return ("Docs repo push", "nightly", "fail",
+                f"{ahead} unpushed commit(s) · {dirty} uncommitted file(s)", when)
+    return ("Docs repo push", "nightly", "ok", "remote in sync", when)
+
+
+def gateway_row():
+    r = subprocess.run(["/usr/bin/pgrep", "-f", "hermes_cli.main gateway run"],
+                       capture_output=True, text=True)
+    pids = r.stdout.split()
+    when = _last_run_when(LOGS / "gateway.log")
+    if not pids:
+        return ("Gateway", "always-on", "fail", "process NOT running", when)
+    return ("Gateway", "always-on", "ok", f"PID {pids[0]} · Slack gateway up", when)
+
+
+def cron_health():
+    rows = [gateway_row()]
+    sync_totals = None
+    jobs = [
+        ("Backup", "backup.log", "3:15a", parse_backup),
+        ("Meeting reports", "meeting-reports.log", "10:00p", parse_meetings),
+        ("GitHub docs sync", "github-docs-sync.log", "9:00p", parse_sync),
+        ("Morning brief", "morning-brief.log", "8:00a", parse_brief),
+        ("Meeting prep", "meeting-prep.log", "15m poll", parse_prep),
+        ("Call reports", "call-reports.log", "per call", parse_callreports),
+        ("Ops digest (prev)", "ops-digest.log", "8:10a", parse_opsdigest),
+    ]
+    for label, logf, sched, parser in jobs:
+        res = parser(LOGS / logf)
+        if label == "GitHub docs sync":
+            status, detail, when, sync_totals = res
+        else:
+            status, detail, when = res
+        rows.append((label, sched, status, detail, when))
+    rows.append(docs_repo_row())
+    return rows, sync_totals
+
+
+# ----------------------------------------------------------------------------- agent activity
+
+def agent_activity():
+    since = "strftime('%s','now','-1 day')"
+    total = sqlite(
+        f"SELECT count(*), coalesce(sum(message_count),0), coalesce(sum(tool_call_count),0), "
+        f"coalesce(sum(input_tokens),0), coalesce(sum(output_tokens),0), "
+        f"coalesce(sum(cache_read_tokens),0), coalesce(sum(reasoning_tokens),0), "
+        f"coalesce(sum(estimated_cost_usd),0) FROM sessions WHERE started_at > {since};")
+    by_source = sqlite(
+        f"SELECT coalesce(source,'?'), count(*), coalesce(sum(input_tokens+output_tokens),0) "
+        f"FROM sessions WHERE started_at > {since} GROUP BY source ORDER BY 3 DESC;")
+    by_model = sqlite(
+        f"SELECT coalesce(model,'?'), count(*), coalesce(sum(input_tokens+output_tokens),0) "
+        f"FROM sessions WHERE started_at > {since} GROUP BY model ORDER BY 3 DESC;")
+    return (total[0] if total else ["0"] * 8), by_source, by_model
+
+
+# ----------------------------------------------------------------------------- kb growth
+
+def kb_growth():
+    rows = pg(
+        "SELECT "
+        "(SELECT count(*) FROM memory_documents WHERE created_at > now()-interval '1 day'), "
+        "(SELECT count(*) FROM memory_documents), "
+        "(SELECT count(*) FROM meetings WHERE created_at > now()-interval '1 day'), "
+        "(SELECT count(*) FROM meetings), "
+        "(SELECT count(*) FROM customers), "
+        "(SELECT count(*) FROM people), "
+        "(SELECT count(*) FROM apps);")
+    return rows[0] if rows else ["0"] * 7
+
+
+# ----------------------------------------------------------------------------- backup status
+
+def backup_status():
+    try:
+        files = sorted(BACKUP_DIR.glob("{{AGENT_SLUG}}-backup-*.tar.gz.gpg"),
+                       key=lambda p: p.name, reverse=True)
+    except OSError:
+        files = []
+    if not files:
+        return None
+    f = files[0]
+    st = f.stat()
+    return {
+        "name": f.name,
+        "size_mb": st.st_size // (1024 * 1024),
+        "age": human_age(datetime.datetime.fromtimestamp(st.st_mtime)),
+        "count": len(files),
+    }
+
+
+# ----------------------------------------------------------------------------- memory stores
+
+def _mem_limits():
+    limits = {"USER.md": 1375, "MEMORY.md": 2200}
+    try:
+        cfg = (HOME / ".hermes" / "config.yaml").read_text()
+        m = re.search(r"user_char_limit:\s*(\d+)", cfg)
+        if m:
+            limits["USER.md"] = int(m.group(1))
+        m = re.search(r"memory_char_limit:\s*(\d+)", cfg)
+        if m:
+            limits["MEMORY.md"] = int(m.group(1))
+    except OSError:
+        pass
+    return limits
+
+
+def memory_health():
+    """Mirror memory_tool's drift check (§ round-trip + size vs limit) daily.
+    Hermes only runs it at write time and surfaces failures as chat noise —
+    a jammed store shows up here as a FAIL instead (see docs/memory-system)."""
+    rows = []
+    day_ago = datetime.datetime.now().timestamp() - 86400
+    for name, limit in _mem_limits().items():
+        p = MEMORIES / name
+        if not p.exists():
+            rows.append((name, "none", "file missing"))
+            continue
+        try:
+            raw = p.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            rows.append((name, "fail", f"unreadable: {e}"))
+            continue
+        parsed = [e.strip() for e in raw.split(ENTRY_DELIM) if e.strip()]
+        total = len(ENTRY_DELIM.join(parsed))
+        max_e = max((len(e) for e in parsed), default=0)
+        new_baks = [b for b in MEMORIES.glob(name + ".bak.*")
+                    if b.stat().st_mtime > day_ago]
+        if raw.strip() != ENTRY_DELIM.join(parsed) or max_e > limit:
+            rows.append((name, "fail", f"DRIFT — writes are being refused "
+                                       f"(max entry {max_e}/{limit} chars)"))
+        elif new_baks:
+            rows.append((name, "fail", f"{len(new_baks)} refused write(s) in 24h "
+                                       f"(.bak snapshots created)"))
+        else:
+            rows.append((name, "ok", f"{len(parsed)} entries · {total}/{limit} chars"))
+    return rows
+
+
+# ----------------------------------------------------------------------------- voice balance
+
+def bland_balance():
+    """Prepaid Bland.ai credit — None if telephony isn't configured."""
+    try:
+        env = (HOME / ".hermes" / ".env").read_text()
+    except OSError:
+        return None
+    m = re.search(r"^BLAND_API_KEY=(.+)$", env, re.M)
+    if not m:
+        return None
+    try:
+        req = urllib.request.Request(
+            "https://api.bland.ai/v1/me",
+            headers={"authorization": m.group(1).strip(),
+                     "User-Agent": "hermes-telephony/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            d = json.loads(r.read().decode())
+        return {"balance": d.get("billing", {}).get("current_balance"),
+                "calls": d.get("total_calls")}
+    except Exception as e:
+        return {"balance": None, "calls": None, "error": str(e)[:80]}
+
+
+# ----------------------------------------------------------------------------- system changes
+
+def system_changes():
+    """Read the artifact written by system_changes.py (3:05a nightly snapshot).
+    Returns dict or None when no fresh artifact (<26h) exists."""
+    meta_p = LOGS / "system-changes.meta.json"
+    html_p = LOGS / "system-changes.html"
+    try:
+        if (datetime.datetime.now().timestamp() - meta_p.stat().st_mtime) > 26 * 3600:
+            return None
+        meta = json.loads(meta_p.read_text())
+    except (OSError, ValueError):
+        return None
+    try:
+        meta["narrative_html"] = html_p.read_text() if html_p.exists() else ""
+    except OSError:
+        meta["narrative_html"] = ""
+    return meta
+
+
+# ----------------------------------------------------------------------------- render
+
+def badge(status):
+    c = {"ok": OKC, "fail": BADC, "none": FAINT}.get(status, MUTED)
+    t = {"ok": "OK", "fail": "FAIL", "none": "—"}.get(status, status.upper())
+    return (f'<span style="display:inline-block;min-width:38px;text-align:center;'
+            f'padding:2px 8px;border-radius:4px;background:{c};color:#fff;'
+            f'font:600 11px {MONO};letter-spacing:.04em">{t}</span>')
+
+
+def section(title):
+    return (f'<div style="font:600 12px {FONT};letter-spacing:.06em;color:{ACCENT};'
+            f'text-transform:uppercase;margin:26px 0 10px">{title}</div>')
+
+
+def render(date_str, cron, sync_totals, total, by_source, by_model, kb, backup,
+           memrows, bland, syschanges):
+    any_fail = (any(r[2] == "fail" for r in cron)
+                or any(s == "fail" for _, s, _ in memrows))
+    status_word = "attention needed" if any_fail else "all green"
+    status_color = BADC if any_fail else OKC
+
+    H = []
+    H.append(f'<div style="max-width:680px;margin:0 auto;font-family:{FONT};color:{INK};'
+             f'font-size:14px;line-height:1.5">')
+    H.append(f'<div style="border-bottom:2px solid {LINE};padding-bottom:12px;margin-bottom:6px">'
+             f'<div style="font-size:20px;font-weight:700">🔧 {{AGENT_NAME}} Ops</div>'
+             f'<div style="color:{MUTED};font-size:13px">{date_str} · last 24h · '
+             f'<span style="color:{status_color};font-weight:600">{status_word}</span></div></div>')
+
+    # Cron health
+    H.append(section("Cron health"))
+    H.append(f'<table style="width:100%;border-collapse:collapse;font-size:13px">')
+    for label, sched, status, detail, when in cron:
+        whenstr = human_age(when) if when else "—"
+        H.append(
+            f'<tr style="border-bottom:1px solid {LINE}">'
+            f'<td style="padding:7px 8px 7px 0;white-space:nowrap">{badge(status)}</td>'
+            f'<td style="padding:7px 8px 7px 0;font-weight:600;white-space:nowrap">{html.escape(label)}'
+            f'<span style="color:{FAINT};font-weight:400;font-size:11px"> · {sched}</span></td>'
+            f'<td style="padding:7px 8px 7px 0;color:{MUTED}">{html.escape(detail)}</td>'
+            f'<td style="padding:7px 0;color:{FAINT};text-align:right;white-space:nowrap;'
+            f'font:11px {MONO}">{whenstr}</td></tr>')
+    H.append('</table>')
+
+    # Agent activity
+    sess, msgs, tools, itok, otok, ctok, rtok, cost = total
+    H.append(section("Agent activity (24h)"))
+    H.append(f'<table style="width:100%;border-collapse:collapse;font-size:13px">')
+    def kv(k, v):
+        return (f'<tr><td style="padding:4px 0;color:{MUTED}">{k}</td>'
+                f'<td style="padding:4px 0;text-align:right;font:600 13px {MONO}">{v}</td></tr>')
+    H.append(kv("Sessions", fmt_int(sess)))
+    H.append(kv("Messages · tool calls", f"{fmt_int(msgs)} · {fmt_int(tools)}"))
+    H.append(kv("Tokens in / out", f"{fmt_int(itok)} / {fmt_int(otok)}"))
+    H.append(kv("Cache-read · reasoning", f"{fmt_int(ctok)} · {fmt_int(rtok)}"))
+    try:
+        costf = float(cost)
+    except (ValueError, TypeError):
+        costf = 0.0
+    H.append(kv("Est. cost", f"${costf:,.2f} <span style='color:{FAINT};font-weight:400'>"
+                f"(Codex/Pro flat-rate; ≈ upper bound)</span>"))
+    H.append('</table>')
+    # source / model split
+    def split_table(title, rows):
+        if not rows:
+            return ""
+        out = [f'<div style="color:{FAINT};font-size:11px;margin:10px 0 3px;'
+               f'text-transform:uppercase;letter-spacing:.05em">{title}</div>'
+               f'<table style="width:100%;border-collapse:collapse;font-size:12px">']
+        for name, cnt, tok in rows:
+            out.append(
+                f'<tr><td style="padding:3px 0;font:12px {MONO};color:{INK}">{html.escape(name)}</td>'
+                f'<td style="padding:3px 8px;text-align:right;color:{MUTED}">{fmt_int(cnt)} sess</td>'
+                f'<td style="padding:3px 0;text-align:right;font:12px {MONO};color:{MUTED}">'
+                f'{fmt_int(tok)} tok</td></tr>')
+        out.append('</table>')
+        return "".join(out)
+    H.append(split_table("by source", by_source))
+    H.append(split_table("by model", by_model))
+
+    # KB growth
+    nd, td, nm, tm, tc, tp, ta = kb
+    H.append(section("Knowledge base"))
+    H.append(f'<table style="width:100%;border-collapse:collapse;font-size:13px">')
+    H.append(kv("New documents (24h)", f"+{fmt_int(nd)} <span style='color:{FAINT};font-weight:400'>"
+                f"({fmt_int(td)} total)</span>"))
+    H.append(kv("New meetings (24h)", f"+{fmt_int(nm)} <span style='color:{FAINT};font-weight:400'>"
+                f"({fmt_int(tm)} total)</span>"))
+    H.append(kv("Customers · people · apps", f"{fmt_int(tc)} · {fmt_int(tp)} · {fmt_int(ta)}"))
+    H.append('</table>')
+
+    # Backup
+    H.append(section("Backup"))
+    if backup:
+        H.append(f'<div style="font-size:13px;color:{MUTED}">Last bundle '
+                 f'<span style="font:12px {MONO};color:{INK}">{html.escape(backup["name"])}</span><br>'
+                 f'{backup["size_mb"]} MB · {backup["age"]} · {backup["count"]} local copy(ies) · '
+                 f'14-day retention in Drive</div>')
+    else:
+        H.append(f'<div style="font-size:13px;color:{FAINT}">No local bundle yet '
+                 f'(first launchd run tonight 3:15a).</div>')
+
+    # System changes (nightly git snapshot of ~/.hermes + build docs)
+    H.append(section("System changes (24h)"))
+    if syschanges is None:
+        H.append(f'<div style="font-size:13px;color:{FAINT}">No snapshot yet '
+                 f'(first run tonight 3:05a).</div>')
+    elif syschanges.get("baseline"):
+        H.append(f'<div style="font-size:13px;color:{MUTED}">Baseline snapshot established — '
+                 f'{fmt_int(syschanges.get("files_tracked", 0))} files now under change tracking. '
+                 f'Daily diffs start tomorrow.</div>')
+    elif not syschanges.get("changed_files"):
+        H.append(f'<div style="font-size:13px;color:{FAINT}">No system changes in the last 24h.</div>')
+    else:
+        if syschanges.get("narrative_html"):
+            H.append(f'<div style="font-size:13px;background:{CARD};border-left:3px solid {ACCENT};'
+                     f'padding:10px 14px;border-radius:0 8px 8px 0;margin-bottom:8px">'
+                     f'{syschanges["narrative_html"]}'
+                     f'<div style="color:{FAINT};font-size:10px;margin-top:6px">GPT-5.5 synthesis — '
+                     f'grounded in the diff below; anything not in the diff is omitted</div></div>')
+        stat = html.escape(syschanges.get("diffstat", "")[:1800])
+        H.append(f'<pre style="font:11px {MONO};color:{MUTED};background:{CARD};padding:10px 12px;'
+                 f'border-radius:8px;overflow-x:auto;white-space:pre-wrap">{stat}</pre>')
+
+    # Memory stores
+    H.append(section("Memory stores"))
+    H.append(f'<table style="width:100%;border-collapse:collapse;font-size:13px">')
+    for name, status, detail in memrows:
+        H.append(
+            f'<tr style="border-bottom:1px solid {LINE}">'
+            f'<td style="padding:7px 8px 7px 0;white-space:nowrap">{badge(status)}</td>'
+            f'<td style="padding:7px 8px 7px 0;font:600 12px {MONO};white-space:nowrap">{html.escape(name)}</td>'
+            f'<td style="padding:7px 0;color:{MUTED}">{html.escape(detail)}</td></tr>')
+    H.append('</table>')
+
+    # Voice (Bland) balance
+    if bland is not None:
+        H.append(section("Voice (Bland)"))
+        bal = bland.get("balance")
+        if bal is None:
+            H.append(f'<div style="font-size:13px;color:{FAINT}">Balance unavailable'
+                     f'{" — " + html.escape(bland.get("error", "")) if bland.get("error") else ""}</div>')
+        else:
+            balf = float(bal)
+            bal_color = BADC if balf < 1.0 else (WARN if balf < 3.0 else INK)
+            H.append(f'<div style="font-size:13px;color:{MUTED}">Prepaid balance '
+                     f'<span style="font:600 13px {MONO};color:{bal_color}">${balf:,.2f}</span>'
+                     f' · {fmt_int(bland.get("calls", 0))} total calls · ≈{int(balf / 0.14)} min '
+                     f'of talk time left at $0.14/min</div>')
+
+    H.append(f'<div style="margin-top:26px;padding-top:12px;border-top:1px solid {LINE};'
+             f'color:{FAINT};font-size:11px">{{AGENT_NAME}} ops digest · deterministic facts '
+             f'(+ one labeled GPT-5.5 changes summary) · '
+             f'{datetime.datetime.now().strftime("%Y-%m-%d %H:%M %Z")}</div>')
+    H.append('</div>')
+    return "".join(H)
+
+
+# ----------------------------------------------------------------------------- main
+
+def main(dry_run=False):
+    now = datetime.datetime.now()
+    date_str = now.strftime("%A, %B %-d")
+    cron, sync_totals = cron_health()
+    total, by_source, by_model = agent_activity()
+    kb = kb_growth()
+    backup = backup_status()
+    memrows = memory_health()
+    bland = bland_balance()
+    syschanges = system_changes()
+    body = render(date_str, cron, sync_totals, total, by_source, by_model, kb, backup,
+                  memrows, bland, syschanges)
+
+    any_fail = (any(r[2] == "fail" for r in cron)
+                or any(s == "fail" for _, s, _ in memrows))
+    subject = f"{'⚠️ ' if any_fail else '🔧 '}{{AGENT_NAME}} Ops — {now.strftime('%b %-d')}"
+
+    if dry_run:
+        out = LOGS / "ops-digest-preview.html"
+        out.write_text(body)
+        print(f"[dry-run] wrote preview -> {out}  (subject: {subject})")
+        sess = total[0]
+        print(f"[dry-run] {sess} sessions, any_fail={any_fail}, "
+              f"backup={'yes' if backup else 'none'}, "
+              f"mem={[f'{n}:{s}' for n, s, _ in memrows]}, "
+              f"bland={'$%.2f' % bland['balance'] if bland and bland.get('balance') is not None else 'n/a'}, "
+              f"syschanges={'yes' if syschanges else 'none'}")
+        return
+
+    send = subprocess.run(
+        [PY, GAPI, "gmail", "send", "--to", OPERATOR, "--subject", subject,
+         "--body", body, "--html"],
+        capture_output=True, text=True,
+    )
+    stamp = now.strftime("%Y-%m-%d %H:%M %Z")
+    if send.returncode == 0:
+        print(f"[{stamp}] sent ops digest (cron_fail={any_fail}, sessions={total[0]})")
+    else:
+        print(f"[{stamp}] SEND FAILED: {send.stderr[-300:]}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main(dry_run="--dry-run" in sys.argv)
