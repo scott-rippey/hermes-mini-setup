@@ -26,7 +26,7 @@ Build a complete, private, always-on AI assistant ("your Sidekick") on a Mac min
 | OpenAI API key | Embeddings only (typically well under $5/mo) |
 | Optional | Bland.ai (phone calls) · a private GitHub repo (docs self-backup) · Google Routes API (live-traffic ETAs) |
 
-Plan roughly half a day for the core build, spread across phases you can pause between.
+Plan a **full day** end-to-end (the reference build took ~1.5 days including tearing out a predecessor system and making every decision fresh — you're inheriting the decisions). The phases pause cleanly, so splitting across evenings works fine.
 
 ## Start
 

@@ -1,0 +1,43 @@
+# USER.md seed — READ THIS BEFORE WRITING THE FILE
+
+> ⚠️ **The #1 setup mistake (we made it; you won't):** `~/.hermes/memories/USER.md`
+> is **owned by the memory tool**, which stores a flat list of entries joined by the
+> delimiter `\n§\n` and budgets the WHOLE file against `memory.user_char_limit`.
+> A hand-written markdown document (headers, sections) parses as ONE giant entry,
+> blows the budget, and **silently breaks every memory write forever** with
+> recurring "drift" errors. The agent can't even remember that it's broken —
+> the mechanism it would use is the broken one.
+
+## Rules
+
+1. Entries separated by a line containing exactly `§` (i.e. joined with `\n§\n`). No headers, no doc structure.
+2. Whole file comfortably under the configured limit (set `memory.user_char_limit: 2200` in config.yaml — the 1,375 default is too tight to leave learning headroom).
+3. 3–4 seed entries max — leave room for the agent to add what it learns.
+4. Standing behavior rules do NOT go here — they live in SOUL.md. This file is *facts about the operator*.
+
+## Template (installer: fill from setup/answers.md, join with `\n§\n`, write verbatim)
+
+Entry 1 — identity:
+```
+{{OPERATOR_NAME}} — {{LOCATION}}, {{TIMEZONE}}. {{ROLE}} of {{BUSINESS_NAME}}: {{BUSINESS_ONE_LINER}}. Background: {{BACKGROUND_BRIEF}}. Cell: {{OPERATOR_CELL}}.
+```
+
+Entry 2 — work shape:
+```
+Builds/advises: {{WORK_TYPES}}. Stack/tools: {{STACK_LIST}}. Quality bar: {{QUALITY_BAR}}. Customer specifics live in the KB, not in this profile.
+```
+
+Entry 3 — working style:
+```
+Working style with {{AGENT_NAME}}: concise and direct; challenge weak plans with a stated basis — final call is {{OPERATOR_FIRST_NAME}}'s; plan first on larger asks; ask when unsure. Treat customer/business info as sensitive and KB-scoped.
+```
+
+## Verify after writing (mirror of the tool's own drift check)
+
+```python
+raw = open(path).read()
+parsed = [e.strip() for e in raw.split("\n§\n") if e.strip()]
+assert raw.strip() == "\n§\n".join(parsed)          # round-trips
+assert max(len(e) for e in parsed) <= LIMIT          # no oversized entry
+assert len("\n§\n".join(parsed)) <= LIMIT            # whole store within budget
+```

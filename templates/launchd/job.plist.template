@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  One template for every scheduled job. Installer: replace {{PLACEHOLDERS}},
+  save as ~/Library/LaunchAgents/ai.hermes.{{JOB}}.plist, then
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.hermes.{{JOB}}.plist
+
+  Reference schedule (stagger deliberately; keep the nightly trilogy ordered):
+    JOB              HOUR  MINUTE   PURPOSE
+    system-changes     3     5      ledger snapshot + grounded change narrative
+    git-backup         3    10      docs repo auto-commit+push
+    backup             3    15      encrypted bundle -> Drive
+    morning-brief      8     0      synthesized daily brief
+    ops-digest         8    10      deterministic all-systems health report
+    github-docs-sync  21     0      customer app docs -> KB (if selected)
+    meeting-reports   22     0      meeting-notes pipeline (if selected)
+  meeting-prep uses StartInterval 900 (every 15 min) INSTEAD of
+  StartCalendarInterval — swap the block per the comment below.
+
+  The gateway is NOT installed from this template — use the platform's own
+  service installer (it needs KeepAlive), e.g. `hermes gateway install`.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.hermes.{{JOB}}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{HERMES_VENV_PYTHON}}</string>
+    <string>{{HOME}}/.hermes/scripts/{{SCRIPT}}.py</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <!-- For interval jobs (meeting-prep): replace the StartCalendarInterval dict
+       with:  <key>StartInterval</key><integer>900</integer>  -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>{{HOUR}}</integer>
+    <key>Minute</key>
+    <integer>{{MINUTE}}</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>{{HOME}}/.hermes/logs/{{JOB}}.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{HOME}}/.hermes/logs/{{JOB}}.log</string>
+</dict>
+</plist>
