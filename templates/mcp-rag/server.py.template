@@ -1,0 +1,533 @@
+# TEMPLATE — the custom KB MCP server. Replace {{PLACEHOLDERS}}, install per
+# templates/mcp-rag/README.md, and NEVER let anything else write the KB tables.
+
+#!/usr/bin/env python3
+"""Local Postgres RAG MCP server for Hermes.
+
+Tools (over MCP / stdio):
+  - store(content, title, customer?, person?, app?, metadata?)  chunk + embed + upsert, attached to a customer (and optionally a person and/or app)
+  - search(query, customer?, person?, app?, limit?)             semantic search, optionally scoped to a customer, person, or app
+  - get(document_id)                                            full document content
+  - customers()                                                 list the canonical customer/identity registry
+  - add_customer(name, aliases?)                                register a new customer/identity
+  - people(customer?)                                           list people/contacts, optionally scoped to one customer
+  - add_person(name, customer, email?, role?, aliases?)         link a person/contact to a customer (company)
+  - apps(customer?)                                             list apps/products, optionally scoped to one customer
+  - add_app(name, customer, repo?)                              register an app/product owned by one customer
+
+People are first-class rows linked to companies through the `customer_people` join
+table (a person can belong to MANY companies, with a per-company role) — contacts are
+NOT stored as alias strings on the company. Apps are first-class rows in `apps`, each
+owned by exactly ONE company (customer_id), with an optional GitHub `repo` its docs
+sync from. A document is attached to ONE company (customer_id) and optionally ONE
+person (person_id) and/or ONE app (app_id); filing under an app derives its company,
+and filing under a multi-company person needs the company named.
+
+Writes into the local `{{KB_DB_NAME}}` Postgres (pgvector), scoped to a dedicated
+namespace (RAG_NAMESPACE -> memory_documents.user_id). Embed-on-store: embeddings are generated here via the OpenAI
+API, not by the database. Each document is attached to a canonical customer
+(default RAG_DEFAULT_CUSTOMER = the user's own identity) so KB content never
+drifts away from who it belongs to.
+"""
+import os
+import re
+import uuid
+from pathlib import Path
+
+# --- load .env (no external dependency) ---
+_ENV = Path(__file__).with_name(".env")
+if _ENV.exists():
+    for _line in _ENV.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
+
+import psycopg
+from psycopg.types.json import Json
+from pgvector.psycopg import register_vector
+from openai import OpenAI
+import tiktoken
+from mcp.server.fastmcp import FastMCP
+
+# --- config ---
+PG_DSN           = os.environ.get("PG_DSN", "dbname=" + os.environ.get("PGDATABASE", "{{KB_DB_NAME}}"))
+EMBED_MODEL      = os.environ.get("EMBED_MODEL", "text-embedding-3-large")
+NAMESPACE        = os.environ.get("RAG_NAMESPACE", "{{AGENT_SLUG}}")  # memory_documents.user_id
+AGENT_ID         = uuid.UUID(os.environ.get("RAG_AGENT_ID", "00000000-0000-0000-0000-000000000000"))
+DEFAULT_CUSTOMER = os.environ.get("RAG_DEFAULT_CUSTOMER", "{{OWNER_SLUG}}")
+CHUNK_TOKENS     = int(os.environ.get("RAG_CHUNK_TOKENS", "400"))
+CHUNK_OVERLAP    = int(os.environ.get("RAG_CHUNK_OVERLAP", "50"))
+
+_oai = OpenAI()
+_enc = tiktoken.get_encoding("cl100k_base")  # text-embedding-3-* tokenizer
+mcp = FastMCP("rag")
+
+
+def _connect(autocommit: bool = True):
+    conn = psycopg.connect(PG_DSN, autocommit=autocommit)
+    register_vector(conn)
+    return conn
+
+
+def _chunk(text: str) -> list[str]:
+    toks = _enc.encode(text)
+    if not toks:
+        return []
+    step = max(1, CHUNK_TOKENS - CHUNK_OVERLAP)
+    out = []
+    for start in range(0, len(toks), step):
+        out.append(_enc.decode(toks[start:start + CHUNK_TOKENS]))
+        if start + CHUNK_TOKENS >= len(toks):
+            break
+    return out
+
+
+def _embed(texts: list[str]) -> list[list[float]]:
+    resp = _oai.embeddings.create(model=EMBED_MODEL, input=texts)
+    return [d.embedding for d in resp.data]
+
+
+def _vec(v) -> str:
+    """Format an embedding as a pgvector literal, for use with `%s::vector` params."""
+    return "[" + ",".join(repr(float(x)) for x in v) + "]"
+
+
+def _slugify(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", (s or "").strip().lower()).strip("-")[:60] or "unnamed"
+
+
+def _resolve_customer(name, cur, create: bool = False):
+    """Resolve a name/slug/alias to a customer {id, slug, name} using the given cursor. Optionally create if missing."""
+    if not name or not str(name).strip():
+        return None
+    needle = str(name).strip().lower()
+    cur.execute(
+        """
+        SELECT id, slug, name FROM customers
+        WHERE lower(slug) = %s OR lower(name) = %s
+           OR EXISTS (SELECT 1 FROM unnest(aliases) a WHERE lower(a) = %s)
+        LIMIT 1
+        """,
+        (needle, needle, needle),
+    )
+    row = cur.fetchone()
+    if row:
+        return {"id": row[0], "slug": row[1], "name": row[2]}
+    if create:
+        cur.execute(
+            "INSERT INTO customers (slug, name) VALUES (%s, %s) "
+            "ON CONFLICT (slug) DO UPDATE SET updated_at = now() RETURNING id, slug, name",
+            (_slugify(name), str(name).strip()),
+        )
+        r = cur.fetchone()
+        return {"id": r[0], "slug": r[1], "name": r[2]}
+    return None
+
+
+def _resolve_person(name, cur, customer_id=None):
+    """Resolve a name/slug/email/alias to a person. If customer_id is given, only match a person linked to that company. Returns the person plus the list of companies they belong to (a person can belong to many)."""
+    if not name or not str(name).strip():
+        return None
+    needle = str(name).strip().lower()
+    cur.execute(
+        """
+        SELECT p.id, p.slug, p.name
+        FROM people p
+        WHERE (lower(p.slug) = %s OR lower(p.name) = %s OR lower(coalesce(p.email, '')) = %s
+               OR EXISTS (SELECT 1 FROM unnest(p.aliases) a WHERE lower(a) = %s))
+          AND (%s::uuid IS NULL
+               OR EXISTS (SELECT 1 FROM customer_people cp WHERE cp.person_id = p.id AND cp.customer_id = %s::uuid))
+        LIMIT 1
+        """,
+        (needle, needle, needle, needle, customer_id, customer_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    pid, pslug, pname = row[0], row[1], row[2]
+    cur.execute(
+        """
+        SELECT c.id, c.slug, c.name, cp.role
+        FROM customer_people cp JOIN customers c ON c.id = cp.customer_id
+        WHERE cp.person_id = %s
+        ORDER BY cp.is_primary DESC, c.name
+        """,
+        (pid,),
+    )
+    companies = [{"id": r[0], "slug": r[1], "name": r[2], "role": r[3]} for r in cur.fetchall()]
+    return {"id": pid, "slug": pslug, "name": pname, "companies": companies}
+
+
+def _resolve_app(name, cur):
+    """Resolve an app by slug / name / repo (owner/name) to {id, slug, name, customer_id, customer_slug, customer_name}. An app belongs to exactly one business."""
+    if not name or not str(name).strip():
+        return None
+    needle = str(name).strip().lower()
+    cur.execute(
+        """
+        SELECT a.id, a.slug, a.name, a.customer_id, c.slug, c.name
+        FROM apps a JOIN customers c ON c.id = a.customer_id
+        WHERE lower(a.slug) = %s OR lower(a.name) = %s OR lower(coalesce(a.repo, '')) = %s
+        LIMIT 1
+        """,
+        (needle, needle, needle),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return {"id": row[0], "slug": row[1], "name": row[2],
+            "customer_id": row[3], "customer_slug": row[4], "customer_name": row[5]}
+
+
+def _store(content, title, customer=None, person=None, app=None, metadata=None) -> dict:
+    content = (content or "").strip()
+    if not content:
+        return {"error": "empty content"}
+    title = (title or "untitled").strip()
+    chunks = _chunk(content)
+    embs = _embed(chunks)
+    with _connect(autocommit=False) as conn, conn.cursor() as cur:  # atomic: customer + doc + chunks
+        app_row = None
+        person_row = None
+        cust = None
+        if app:
+            app_row = _resolve_app(app, cur)
+            if not app_row:
+                return {"error": f"app '{app}' not found — register it with add_app first"}
+            # an app belongs to one business → that's the doc's customer
+            cust = {"id": app_row["customer_id"], "slug": app_row["customer_slug"], "name": app_row["customer_name"]}
+        if person:
+            scope = _resolve_customer(customer, cur) if customer else cust
+            person_row = _resolve_person(person, cur, scope["id"] if scope else None)
+            if not person_row:
+                return {"error": f"person '{person}' not found — add them with add_person first"}
+            if cust is None:  # derive the business from the person when no app set it
+                comps = person_row["companies"]
+                if scope:
+                    cust = scope
+                elif len(comps) == 1:
+                    cust = comps[0]
+                elif not comps:
+                    return {"error": f"person '{person}' isn't linked to any company — link them with add_person, or pass customer="}
+                else:
+                    slugs = ", ".join(c["slug"] for c in comps)
+                    return {"error": f"person '{person}' is linked to multiple companies ({slugs}) — pass customer= to choose which"}
+        if cust is None:
+            cust = _resolve_customer(customer or DEFAULT_CUSTOMER, cur, create=True)
+        cust_id = cust["id"] if cust else None
+        person_id = person_row["id"] if person_row else None
+        app_id = app_row["id"] if app_row else None
+        cur.execute(
+            """
+            INSERT INTO memory_documents (id, user_id, agent_id, path, content, metadata, customer_id, person_id, app_id, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+            ON CONFLICT (user_id, agent_id, path)
+            DO UPDATE SET content = EXCLUDED.content, metadata = EXCLUDED.metadata,
+                          customer_id = EXCLUDED.customer_id, person_id = EXCLUDED.person_id,
+                          app_id = EXCLUDED.app_id, updated_at = now()
+            RETURNING id
+            """,
+            (uuid.uuid4(), NAMESPACE, AGENT_ID, title, content, Json(metadata or {}), cust_id, person_id, app_id),
+        )
+        doc_id = cur.fetchone()[0]
+        cur.execute("DELETE FROM memory_chunks WHERE document_id = %s", (doc_id,))
+        for i, (chunk, emb) in enumerate(zip(chunks, embs)):
+            cur.execute(
+                """
+                INSERT INTO memory_chunks (id, document_id, chunk_index, content, embedding, created_at)
+                VALUES (%s, %s, %s, %s, %s::vector, now())
+                """,
+                (uuid.uuid4(), doc_id, i, chunk, _vec(emb)),
+            )
+    return {"document_id": str(doc_id), "title": title,
+            "customer": cust["slug"] if cust else None,
+            "person": person_row["slug"] if person_row else None,
+            "app": app_row["slug"] if app_row else None, "chunks": len(chunks)}
+
+
+def _add_meeting(content, title, meeting_id=None, meeting_date=None, meeting_type=None,
+                 counterpart=None, customer=None, person=None, pdf_path=None, metadata=None) -> dict:
+    """File a meeting: store the searchable KB doc (via _store) + upsert the structured meetings row."""
+    md = dict(metadata or {})
+    md["type"] = "meeting"
+    md.setdefault("source", "granola")
+    if meeting_id:
+        md["meeting_id"] = meeting_id
+    if meeting_date:
+        md.setdefault("date", meeting_date)
+    if meeting_type:
+        md.setdefault("meeting_type", meeting_type)
+    if counterpart:
+        md.setdefault("counterpart", counterpart)
+    who = person or counterpart
+    # Meeting rule: a multi-company counterpart with no explicit customer defaults to their
+    # PRIMARY company (resolver returns companies primary-first) rather than erroring.
+    if who and not customer:
+        with _connect() as conn, conn.cursor() as _c:
+            _pr = _resolve_person(who, _c)
+        if _pr and len(_pr.get("companies") or []) > 1:
+            customer = _pr["companies"][0]["slug"]
+    res = _store(content, title, customer=customer, person=who, metadata=md)
+    if "error" in res:
+        return res
+    doc_id = res["document_id"]
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id FROM customers WHERE slug = %s", (res.get("customer"),))
+        r = cur.fetchone(); customer_id = r[0] if r else None
+        person_id = None
+        if res.get("person"):
+            cur.execute("SELECT id FROM people WHERE slug = %s", (res["person"],))
+            r = cur.fetchone(); person_id = r[0] if r else None
+        cur.execute(
+            """
+            INSERT INTO meetings (id, customer_id, person_id, meeting_id, title, meeting_date,
+                                  meeting_type, document_id, pdf_path, source, metadata, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+            ON CONFLICT (meeting_id) WHERE meeting_id IS NOT NULL DO UPDATE SET
+              customer_id = EXCLUDED.customer_id, person_id = EXCLUDED.person_id, title = EXCLUDED.title,
+              meeting_date = EXCLUDED.meeting_date, meeting_type = EXCLUDED.meeting_type,
+              document_id = EXCLUDED.document_id, pdf_path = EXCLUDED.pdf_path,
+              metadata = EXCLUDED.metadata, updated_at = now()
+            RETURNING id
+            """,
+            (uuid.uuid4(), customer_id, person_id, meeting_id, title,
+             (meeting_date or None), meeting_type, doc_id, pdf_path, md.get("source", "granola"), Json(md)),
+        )
+        mid = cur.fetchone()[0]
+    return {"meeting_row_id": str(mid), "meeting_id": meeting_id, "document_id": doc_id,
+            "customer": res.get("customer"), "person": res.get("person"), "title": title}
+
+
+def _search(query, customer=None, person=None, app=None, limit: int = 5) -> list[dict]:
+    qemb = _embed([query])[0]
+    with _connect() as conn, conn.cursor() as cur:
+        cust = _resolve_customer(customer, cur) if customer else None
+        cust_id = cust["id"] if cust else None
+        pers = _resolve_person(person, cur, cust_id) if person else None
+        pers_id = pers["id"] if pers else None
+        ap = _resolve_app(app, cur) if app else None
+        app_id = ap["id"] if ap else None
+        cur.execute(
+            """
+            SELECT c.content, d.path, d.id,
+                   1 - (c.embedding <=> %s::vector) AS similarity,
+                   (SELECT slug FROM customers cu WHERE cu.id = d.customer_id) AS customer,
+                   (SELECT slug FROM people pp WHERE pp.id = d.person_id) AS person,
+                   (SELECT slug FROM apps ap WHERE ap.id = d.app_id) AS app
+            FROM memory_chunks c
+            JOIN memory_documents d ON d.id = c.document_id
+            WHERE d.user_id = %s AND d.agent_id = %s
+              AND (%s::uuid IS NULL OR d.customer_id = %s::uuid)
+              AND (%s::uuid IS NULL OR d.person_id = %s::uuid)
+              AND (%s::uuid IS NULL OR d.app_id = %s::uuid)
+            ORDER BY c.embedding <=> %s::vector
+            LIMIT %s
+            """,
+            (_vec(qemb), NAMESPACE, AGENT_ID, cust_id, cust_id, pers_id, pers_id, app_id, app_id, _vec(qemb), limit),
+        )
+        rows = cur.fetchall()
+    return [
+        {"title": r[1], "document_id": str(r[2]), "similarity": round(float(r[3]), 4),
+         "customer": r[4], "person": r[5], "app": r[6], "content": r[0]}
+        for r in rows
+    ]
+
+
+def _get(document_id: str) -> dict:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT d.path, d.content, d.metadata,
+                   (SELECT slug FROM customers cu WHERE cu.id = d.customer_id) AS customer,
+                   (SELECT slug FROM people pp WHERE pp.id = d.person_id) AS person,
+                   (SELECT slug FROM apps ap WHERE ap.id = d.app_id) AS app
+            FROM memory_documents d WHERE d.id = %s::uuid AND d.user_id = %s
+            """,
+            (document_id, NAMESPACE),
+        )
+        row = cur.fetchone()
+    if not row:
+        return {"error": f"document {document_id} not found"}
+    return {"title": row[0], "content": row[1], "metadata": row[2], "customer": row[3], "person": row[4], "app": row[5]}
+
+
+@mcp.tool()
+def store(content: str, title: str, customer: str | None = None, person: str | None = None, app: str | None = None, metadata: dict | None = None) -> dict:
+    """Save to the user's KNOWLEDGE BASE ("KB" / "knowledge base") — the local Postgres vector store. ALWAYS use this (NOT built-in memory) whenever the user mentions the knowledge base or KB, or asks to store/save a document, customer info, proposal, research, notes, or an uploaded file. `customer` attaches the document to a customer/identity (name, slug, or alias — resolved to the canonical record, created if genuinely new; defaults to the user's own identity). `person` files the document under a specific contact (name, slug, email, or alias); if that person belongs to one company it attaches there automatically, and if they belong to several you must also pass `customer` to say which. Use it for notes or meetings tied to a person (add them first with add_person). `app` files the document under a specific app / product / project (name, slug, or its GitHub `owner/repo`) and, through the app, under its business — use it for an app's documentation, specs, or notes (register the app first with add_app). `title` is the unique key — re-storing the same title replaces that document."""
+    return _store(content, title, customer, person, app, metadata)
+
+
+@mcp.tool()
+def add_meeting(content: str, title: str, meeting_id: str | None = None, meeting_date: str | None = None, meeting_type: str | None = None, counterpart: str | None = None, customer: str | None = None, person: str | None = None, pdf_path: str | None = None, metadata: dict | None = None) -> dict:
+    """File a MEETING into the KB: stores the meeting's markdown as a searchable document AND upserts a structured row in the `meetings` table (linked to the customer, the person/counterpart, and the KB doc). Use this (NOT `store`) for meeting notes/reports. `counterpart` is who the meeting was with (the "w/ Name"); it resolves to a person and through them to the company — pass `customer` to disambiguate when the person belongs to several companies. `meeting_id` is the external id (e.g. Granola) and the dedupe key — re-filing the same meeting_id updates the row. `meeting_date` is YYYY-MM-DD. `pdf_path` is the rendered PDF's path. Returns the meeting row id, document id, and resolved customer/person."""
+    return _add_meeting(content, title, meeting_id=meeting_id, meeting_date=meeting_date, meeting_type=meeting_type, counterpart=counterpart, customer=customer, person=person, pdf_path=pdf_path, metadata=metadata)
+
+
+@mcp.tool()
+def search(query: str, customer: str | None = None, person: str | None = None, app: str | None = None, limit: int = 5) -> list[dict]:
+    """Search the user's KNOWLEDGE BASE ("KB" / "knowledge base") — semantic search over stored documents. ALWAYS use this (NOT built-in memory) whenever the user asks to search/find/look up/recall something in the knowledge base or KB, or about a customer, proposal, app, or research. Pass `customer` (name/slug/alias) to scope to one customer, `person` (name/slug/email/alias) to scope to one contact's documents, or `app` (name/slug/repo) to scope to one app's documentation; omit all to search across everything. Returns the most relevant chunks with document_id, title, customer, person, app, and similarity. To read a whole document, call `get`."""
+    return _search(query, customer, person, app, limit)
+
+
+@mcp.tool()
+def get(document_id: str) -> dict:
+    """Fetch the full content of a KNOWLEDGE BASE ("KB") document by its document_id (as returned by `search`)."""
+    return _get(document_id)
+
+
+@mcp.tool()
+def customers() -> list[dict]:
+    """List the customers / identities in the knowledge base — the canonical registry. Returns slug, name, aliases, and document count for each. Call this to find the right existing customer before storing or searching, so you reuse a canonical identity instead of creating a duplicate."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.slug, c.name, c.aliases,
+                   (SELECT count(*) FROM memory_documents d WHERE d.customer_id = c.id) AS docs
+            FROM customers c ORDER BY c.name
+            """
+        )
+        rows = cur.fetchall()
+    return [{"slug": r[0], "name": r[1], "aliases": list(r[2] or []), "documents": r[3]} for r in rows]
+
+
+@mcp.tool()
+def add_customer(name: str, aliases: list[str] | None = None) -> dict:
+    """Register a NEW customer / identity in the knowledge base. Use only when it is genuinely new — call `customers` first to avoid duplicates. `aliases` are alternate names that should resolve to this same record (e.g. ["Acme", "Acme Corporation"])."""
+    with _connect() as conn, conn.cursor() as cur:
+        existing = _resolve_customer(name, cur)
+        if existing:
+            return {"slug": existing["slug"], "name": existing["name"], "created": False, "note": "already exists"}
+        cur.execute(
+            "INSERT INTO customers (slug, name, aliases) VALUES (%s, %s, %s) RETURNING slug, name",
+            (_slugify(name), name.strip(), aliases or []),
+        )
+        r = cur.fetchone()
+    return {"slug": r[0], "name": r[1], "created": True}
+
+
+@mcp.tool()
+def people(customer: str | None = None) -> list[dict]:
+    """List the people / contacts in the knowledge base. Pass `customer` (name/slug/alias) to scope to one company's contacts; omit it to list everyone. A person can belong to MANY companies — each result lists their `companies` (slug + per-company role). Also returns slug, name, email, aliases, and document count. Call this to find an existing person before adding or filing under one, so you reuse a canonical contact instead of creating a duplicate."""
+    with _connect() as conn, conn.cursor() as cur:
+        cust = _resolve_customer(customer, cur) if customer else None
+        cust_id = cust["id"] if cust else None
+        cur.execute(
+            """
+            SELECT p.id, p.slug, p.name, p.email, p.aliases,
+                   (SELECT count(*) FROM memory_documents d WHERE d.person_id = p.id) AS docs
+            FROM people p
+            WHERE (%s::uuid IS NULL
+                   OR EXISTS (SELECT 1 FROM customer_people cp WHERE cp.person_id = p.id AND cp.customer_id = %s::uuid))
+            ORDER BY p.name
+            """,
+            (cust_id, cust_id),
+        )
+        rows = cur.fetchall()
+        out = []
+        for pid, pslug, pname, pemail, paliases, docs in rows:
+            cur.execute(
+                """
+                SELECT c.slug, cp.role FROM customer_people cp JOIN customers c ON c.id = cp.customer_id
+                WHERE cp.person_id = %s ORDER BY cp.is_primary DESC, c.slug
+                """,
+                (pid,),
+            )
+            comps = [{"customer": r[0], "role": r[1]} for r in cur.fetchall()]
+            out.append({"slug": pslug, "name": pname, "email": pemail,
+                        "aliases": list(paliases or []), "companies": comps, "documents": docs})
+    return out
+
+
+@mcp.tool()
+def add_person(name: str, customer: str, email: str | None = None,
+               role: str | None = None, aliases: list[str] | None = None) -> dict:
+    """Link a PERSON / contact to a customer (company). A person can belong to MANY companies — this finds the person (by name / email / alias) or creates them, then links them to `customer` with an optional per-company `role`. Use it both to add a brand-new contact and to attach an EXISTING person (already at another company) to this one. The company must already exist — call `customers` first, and `add_customer` if it doesn't. `email` / `aliases` update the person record; `role` is stored on the company link (so the same person can have different roles at different companies). Re-linking the same person + company updates the role."""
+    with _connect() as conn, conn.cursor() as cur:
+        comp = _resolve_customer(customer, cur)
+        if not comp:
+            return {"error": f"customer '{customer}' not found — onboard the company first with add_customer"}
+        person = _resolve_person(name, cur)  # global — find the person at ANY company, or None
+        if person:
+            pid = person["id"]
+            person_created = False
+            if email or aliases:
+                cur.execute(
+                    """
+                    UPDATE people
+                    SET email = COALESCE(%s, email),
+                        aliases = (SELECT array(SELECT DISTINCT e FROM unnest(aliases || %s::text[]) e WHERE e <> '')),
+                        updated_at = now()
+                    WHERE id = %s
+                    """,
+                    (email, aliases or [], pid),
+                )
+        else:
+            cur.execute(
+                "INSERT INTO people (slug, name, email, aliases) VALUES (%s, %s, %s, %s) RETURNING id",
+                (_slugify(name), name.strip(), email, aliases or []),
+            )
+            pid = cur.fetchone()[0]
+            person_created = True
+        # link the person to the company (idempotent); first-ever company for this person = primary
+        cur.execute(
+            """
+            INSERT INTO customer_people (customer_id, person_id, role, is_primary)
+            VALUES (%s, %s, %s, NOT EXISTS (SELECT 1 FROM customer_people WHERE person_id = %s))
+            ON CONFLICT (customer_id, person_id)
+            DO UPDATE SET role = COALESCE(EXCLUDED.role, customer_people.role), updated_at = now()
+            RETURNING (xmax = 0) AS newly_linked
+            """,
+            (comp["id"], pid, role, pid),
+        )
+        newly_linked = cur.fetchone()[0]
+        cur.execute("SELECT slug, name FROM people WHERE id = %s", (pid,))
+        r = cur.fetchone()
+    return {"slug": r[0], "name": r[1], "customer": comp["slug"],
+            "person_created": person_created, "newly_linked": newly_linked}
+
+
+@mcp.tool()
+def apps(customer: str | None = None) -> list[dict]:
+    """List apps / products / projects in the knowledge base, optionally scoped to one customer (business). Each app belongs to exactly one business. Returns each app's slug, name, GitHub repo, owning customer, and document count. Call this to find the right app before storing or searching under it."""
+    with _connect() as conn, conn.cursor() as cur:
+        cust = _resolve_customer(customer, cur) if customer else None
+        cust_id = cust["id"] if cust else None
+        cur.execute(
+            """
+            SELECT a.slug, a.name, a.repo,
+                   (SELECT slug FROM customers c WHERE c.id = a.customer_id) AS customer,
+                   (SELECT count(*) FROM memory_documents d WHERE d.app_id = a.id) AS docs
+            FROM apps a
+            WHERE (%s::uuid IS NULL OR a.customer_id = %s::uuid)
+            ORDER BY a.name
+            """,
+            (cust_id, cust_id),
+        )
+        rows = cur.fetchall()
+    return [{"slug": r[0], "name": r[1], "repo": r[2], "customer": r[3], "documents": r[4]} for r in rows]
+
+
+@mcp.tool()
+def add_app(name: str, customer: str, repo: str | None = None) -> dict:
+    """Register an APP / product / project, owned by exactly ONE customer (business). E.g. add_app("Acme Portal", "Acme Corp", "acme-org/portal"). `repo` is the GitHub "owner/name" its documentation syncs from. The customer must already exist (call `customers` / `add_customer`). Call `apps` first to avoid duplicates; re-adding an existing app updates its repo."""
+    with _connect() as conn, conn.cursor() as cur:
+        comp = _resolve_customer(customer, cur)
+        if not comp:
+            return {"error": f"customer '{customer}' not found — onboard the company first with add_customer"}
+        existing = _resolve_app(name, cur)
+        if existing:
+            if repo:
+                cur.execute("UPDATE apps SET repo = %s, updated_at = now() WHERE id = %s", (repo, existing["id"]))
+            return {"slug": existing["slug"], "name": existing["name"], "customer": comp["slug"],
+                    "repo": repo, "created": False, "note": "already exists"}
+        cur.execute(
+            "INSERT INTO apps (customer_id, slug, name, repo) VALUES (%s, %s, %s, %s) RETURNING slug, name",
+            (comp["id"], _slugify(name), name.strip(), repo),
+        )
+        r = cur.fetchone()
+    return {"slug": r[0], "name": r[1], "customer": comp["slug"], "repo": repo, "created": True}
+
+
+if __name__ == "__main__":
+    mcp.run()
