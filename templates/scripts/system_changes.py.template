@@ -1,0 +1,161 @@
+# TEMPLATE — replace {{PLACEHOLDERS}} from setup/answers.md, save to ~/.hermes/scripts/,
+# smoke-test by hand, THEN schedule via templates/launchd/. Placeholder registry: templates/README.md
+
+#!/usr/bin/env python3
+"""Nightly system-change snapshot + grounded GPT-5.5 analysis.
+
+~/.hermes is a LOCAL-ONLY git repo (no remote; secrets gitignored) used purely
+as a change ledger. Each night at 3:05a this script:
+
+  1. commits the day's changes ("auto: system snapshot ...")
+  2. builds the last-24h diff, plus the ~/hermes-setup build-docs delta
+  3. has GPT-5.5 (headless `hermes -z`, Codex OAuth) write a SHORT
+     what-changed / what-we-built summary — HARD-GROUNDED: it may only restate
+     what the diff shows; anything uncertain is omitted, and the raw diffstat
+     is always rendered alongside it in the digest as the checkable truth
+  4. writes the artifacts the 8:10a ops digest embeds:
+       ~/.hermes/logs/system-changes.meta.json   (deterministic facts)
+       ~/.hermes/logs/system-changes.html        (narrative fragment, may be empty)
+
+Runs BEFORE the 3:15a backup so the snapshot commit rides the encrypted bundle.
+Smoke-test:  python system_changes.py
+"""
+import datetime
+import json
+import re
+import subprocess
+from pathlib import Path
+
+HOME = Path.home()
+GIT = "/usr/bin/git"
+LEDGER = str(HOME / ".hermes")
+SETUP = str(HOME / "{{DOCS_REPO_DIR}}")
+LOGS = HOME / ".hermes" / "logs"
+HERMES = str(HOME / ".hermes/hermes-agent/venv/bin/hermes")
+META = LOGS / "system-changes.meta.json"
+HTMLF = LOGS / "system-changes.html"
+DIFF_CAP = 12000  # chars of raw diff handed to the model
+
+
+def log(msg):
+    print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+
+
+def git(repo, *args):
+    r = subprocess.run([GIT, "-C", repo, *args], capture_output=True, text=True)
+    return r.returncode, r.stdout.strip()
+
+
+def snapshot():
+    """Commit the day's ~/.hermes changes into the ledger. Returns True if committed."""
+    git(LEDGER, "add", "-A")
+    rc, _ = git(LEDGER, "diff", "--cached", "--quiet")
+    if rc == 0:
+        return False
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    git(LEDGER, "commit", "-q", "-m", f"auto: system snapshot {ts}")
+    return True
+
+
+def window_base():
+    """Newest commit older than 24h — the diff base. Empty string = none (young repo)."""
+    _, sha = git(LEDGER, "rev-list", "-1", "--before=24 hours ago", "HEAD")
+    return sha
+
+
+def build_docs_delta():
+    """Last-24h delta of ~/hermes-setup: commits + uncommitted working-tree stat."""
+    parts = []
+    _, commits = git(SETUP, "log", "--since=24 hours ago", "--oneline", "--stat")
+    if commits:
+        parts.append("build-docs commits (24h):\n" + commits)
+    _, wt = git(SETUP, "diff", "--stat")
+    if wt:
+        parts.append("build-docs uncommitted changes:\n" + wt)
+    return "\n\n".join(parts)
+
+
+def collect(base):
+    _, diffstat = git(LEDGER, "diff", "--stat", f"{base}..HEAD")
+    _, names = git(LEDGER, "diff", "--name-status", f"{base}..HEAD")
+    _, raw = git(LEDGER, "diff", "--unified=1", f"{base}..HEAD")
+    m = re.search(r"(\d+) insertion", diffstat)
+    ins = int(m.group(1)) if m else 0
+    m = re.search(r"(\d+) deletion", diffstat)
+    dels = int(m.group(1)) if m else 0
+    changed = [ln for ln in names.splitlines() if ln.strip()]
+    setup = build_docs_delta()
+    if setup:
+        diffstat = (diffstat + "\n\n" + setup).strip()
+    return {
+        "changed_files": len(changed),
+        "insertions": ins,
+        "deletions": dels,
+        "diffstat": diffstat,
+        "raw_diff": raw[:DIFF_CAP],
+        "setup_delta": setup,
+    }
+
+
+def narrative(facts):
+    """Grounded GPT-5.5 summary of the diff. Returns HTML fragment or ''."""
+    prompt = (
+        "You are {{AGENT_NAME}} writing the 'System changes' section of {{OPERATOR_FIRST_NAME}}'s daily ops digest.\n"
+        "Below is your ONLY source of truth: the last-24h git changes of the Hermes system "
+        "(~/.hermes config, skills, scripts, SOUL, memories) and the build docs.\n\n"
+        "HARD RULES — violating any of these makes the output worthless:\n"
+        "- Every statement must be directly evidenced by the diff text below.\n"
+        "- Do NOT infer intent, speculate, or mention anything absent from the diff.\n"
+        "- If a change's purpose isn't evident from the diff content itself, name the "
+        "change without ascribing purpose.\n"
+        "- Unsure about something? Omit it.\n\n"
+        f"=== name-status + diffstat ===\n{facts['diffstat'][:3000]}\n\n"
+        f"=== raw diff (capped) ===\n{facts['raw_diff']}\n\n"
+        "Write a short HTML fragment (<p>/<ul>/<li>/<strong> only, max ~120 words): "
+        "what changed and what got built, in plain operator terms — lead with the most "
+        "significant item. Return ONLY the fragment between <!--SYS--> and <!--/SYS--> markers."
+    )
+    try:
+        r = subprocess.run([HERMES, "-z", prompt], capture_output=True, text=True, timeout=300)
+        out = r.stdout or ""
+    except Exception as e:
+        log(f"narrative failed: {e}")
+        return ""
+    m = re.search(r"<!--SYS-->(.*?)<!--/SYS-->", out, re.S)
+    frag = (m.group(1) if m else "").strip()
+    frag = re.sub(r"```html|```", "", frag).strip()
+    return frag if ("<p" in frag or "<ul" in frag or "<li" in frag) else ""
+
+
+def main():
+    LOGS.mkdir(parents=True, exist_ok=True)
+    committed = snapshot()
+    base = window_base()
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+
+    if not base:
+        _, tracked = git(LEDGER, "ls-files")
+        meta = {"date": today, "baseline": True,
+                "files_tracked": len(tracked.splitlines()), "changed_files": 0}
+        META.write_text(json.dumps(meta, indent=2))
+        HTMLF.write_text("")
+        log(f"baseline window — {meta['files_tracked']} files tracked; diffs start tomorrow "
+            f"(snapshot committed: {committed})")
+        return
+
+    facts = collect(base)
+    frag = ""
+    if facts["changed_files"] or facts["setup_delta"]:
+        frag = narrative(facts)
+    meta = {"date": today, "baseline": False,
+            "changed_files": facts["changed_files"],
+            "insertions": facts["insertions"], "deletions": facts["deletions"],
+            "diffstat": facts["diffstat"], "narrative_ok": bool(frag)}
+    META.write_text(json.dumps(meta, indent=2))
+    HTMLF.write_text(frag)
+    log(f"snapshot={committed} changed_files={facts['changed_files']} "
+        f"+{facts['insertions']}/-{facts['deletions']} narrative={'yes' if frag else 'no'}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,54 @@
+# TEMPLATE — replace {{PLACEHOLDERS}} from setup/answers.md, save to ~/.hermes/scripts/,
+# smoke-test by hand, THEN schedule via templates/launchd/. Placeholder registry: templates/README.md
+
+#!/usr/bin/env python3
+"""Nightly self-backup of ~/hermes-setup to the private GitHub repo.
+
+Auto-commits any working-tree changes ("auto: nightly docs snapshot ...") and
+pushes to origin ({{PRIVATE_DOCS_REMOTE}} — MUST be private). Credentials come
+from the login keychain via the repo-local git credential helper — never from
+files or URLs.
+
+Runs at 3:10a ET, deliberately between the other two nightly snapshot jobs:
+3:05 system-changes ledger commit -> 3:10 docs push (this) -> 3:15 encrypted
+Drive bundle, so the pushed state matches what the bundle carries.
+Smoke-test:  python git_backup.py
+"""
+import datetime
+import subprocess
+import sys
+from pathlib import Path
+
+GIT = "/usr/bin/git"
+REPO = str(Path.home() / "{{DOCS_REPO_DIR}}")
+
+
+def log(msg):
+    print(f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
+
+
+def g(*args, check=True):
+    r = subprocess.run([GIT, "-C", REPO, *args], capture_output=True, text=True)
+    if check and r.returncode != 0:
+        log(f"FAILED: git {' '.join(args[:2])} -> {r.stderr.strip()[-300:]}")
+        sys.exit(1)
+    return r
+
+
+def main():
+    g("add", "-A")
+    dirty = g("diff", "--cached", "--quiet", check=False).returncode != 0
+    if dirty:
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d")
+        g("commit", "-q", "-m", f"auto: nightly docs snapshot {stamp}")
+    out = g("rev-list", "--count", "@{u}..HEAD", check=False).stdout.strip()
+    ahead = int(out) if out.isdigit() else 1
+    if not dirty and ahead == 0:
+        log("clean + in sync — nothing to push")
+        return
+    g("push", "-q", "origin", "main")
+    log(f"pushed OK (auto-committed={dirty}, commits_pushed={max(ahead, 1)})")
+
+
+if __name__ == "__main__":
+    main()

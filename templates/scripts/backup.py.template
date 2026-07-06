@@ -1,0 +1,306 @@
+# TEMPLATE — replace {{PLACEHOLDERS}} from setup/answers.md, save to ~/.hermes/scripts/,
+# smoke-test by hand, THEN schedule via templates/launchd/. Placeholder registry: templates/README.md
+
+#!/usr/bin/env python3
+"""Encrypted nightly backup -> the agent's Google Drive.
+
+Bundles the irreplaceable, box-only state into ONE gpg-encrypted tarball and
+uploads it to an "{{AGENT_NAME}} Backups" folder in the agent account's Drive (offsite):
+
+  1. Postgres KB     -> pg_dump of the `ironclaw` DB (customers/people/apps/
+                        meetings/documents + embeddings)  -> kb.sql
+  2. Built-in memory -> consistent sqlite snapshots of state.db (+ kanban.db)
+  3. Config / code / secrets -> tar of ~/.hermes (config.yaml, SOUL.md, skills/,
+                        scripts/, mcp-rag/, memories/, mcp-tokens/, cron/, .env,
+                        auth.json, google_*.json) MINUS the regenerable bulk
+                        (hermes-agent/, caches, logs, venvs, node_modules).
+  4. Project docs + CC memory -> ~/hermes-setup (build plan, session log, schema
+                        doc, incl. .git history) and the Claude Code memory files
+                        + global CLAUDE.md — box-only knowledge with no other copy.
+
+The bundle is AES-256 encrypted with a passphrase from the login keychain
+(service `{{AGENT_SLUG}}-backup-key`, acct `sidekick`) so the cloud copy is opaque
+even though it contains live credentials. Retention: 14 days in Drive, 1 copy
+local in ~/backups/. A RESTORE.txt is embedded in every bundle.
+
+Scheduled via launchd `ai.hermes.backup` at ~3am ET. Smoke-test:  python backup.py
+"""
+import datetime
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HOME = Path.home()
+LOGS = HOME / ".hermes" / "logs"
+LOCAL_BACKUP_DIR = HOME / "backups"
+STATE_FILE = HOME / ".hermes" / "scripts" / ".backup_state.json"
+GAPI = str(HOME / ".hermes/skills/productivity/google-workspace/scripts/google_api.py")
+PY = str(HOME / ".hermes/hermes-agent/venv/bin/python")
+
+# Absolute tool paths (launchd runs with a minimal PATH).
+PG_DUMP = "/opt/homebrew/bin/pg_dump"
+SQLITE3 = "/usr/bin/sqlite3"
+TAR = "/usr/bin/tar"
+GPG = "/opt/homebrew/bin/gpg"
+SECURITY = "/usr/bin/security"
+
+PGDATABASE = "{{KB_DB_NAME}}"
+KEYCHAIN_SERVICE = "{{AGENT_SLUG}}-backup-key"
+KEYCHAIN_ACCOUNT = "{{AGENT_SLUG}}"
+DRIVE_FOLDER_NAME = "{{AGENT_NAME}} Backups"
+RETAIN_DRIVE_DAYS = 14
+RETAIN_LOCAL = 1
+
+# The two live SQLite DBs to snapshot consistently (WAL-active -> never file-copy).
+SQLITE_DBS = ["state.db", "kanban.db"]
+
+# tar of ~/.hermes with these pruned (regenerable / huge / live-DB / secrets-safe-but-bulky).
+TAR_EXCLUDES = [
+    ".hermes/hermes-agent", ".hermes/node", ".hermes/cache",
+    ".hermes/bootstrap-cache", ".hermes/audio_cache", ".hermes/image_cache",
+    ".hermes/sandboxes", ".hermes/logs", ".hermes/plugins",
+    ".hermes/hermes-setup", ".hermes/models_dev_cache.json",
+    # regenerable tooling/deps (reinstalled, not config): uv/tirith binaries,
+    # scrapling browser-driver venv (~390MB of Playwright/patchright)
+    ".hermes/bin", ".hermes/tools",
+    # live DBs (snapshotted separately for consistency)
+    ".hermes/state.db", ".hermes/state.db-shm", ".hermes/state.db-wal",
+    ".hermes/kanban.db", ".hermes/kanban.db-shm", ".hermes/kanban.db-wal",
+    # globs ("*venv*" catches .venv / venv / scrapling-venv)
+    "*.lock", "*.log", "*node_modules*", "*__pycache__*", "*venv*", "*.pyc",
+]
+
+# Box-only project knowledge outside ~/.hermes (tiny; repo tarred WITH .git).
+EXTRA_HOME_PATHS = [
+    "{{DOCS_REPO_DIR}}",
+    "{{CC_MEMORY_DIR}}",  # Claude Code project memory dir (machine-specific path)
+    ".claude/CLAUDE.md",
+]
+
+NAME_RE = re.compile(r"^{{AGENT_SLUG}}-backup-(\d{8}-\d{6})\.tar\.gz\.gpg$")
+
+
+def log(msg):
+    ts = datetime.datetime.now().strftime("%H:%M:%S")
+    print(f"[{ts}] {msg}", flush=True)
+
+
+def run(cmd, **kw):
+    """Run a command, raising on failure. stdin/stdout/stderr controllable via kw."""
+    return subprocess.run(cmd, check=True, **kw)
+
+
+def passphrase():
+    """Fetch the backup passphrase from the login keychain (never logged)."""
+    out = subprocess.run(
+        [SECURITY, "find-generic-password", "-s", KEYCHAIN_SERVICE,
+         "-a", KEYCHAIN_ACCOUNT, "-w"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    if not out:
+        raise RuntimeError("backup passphrase not found in keychain")
+    return out
+
+
+def gapi(args):
+    """Call the google-workspace CLI, return parsed JSON stdout."""
+    res = subprocess.run(
+        [PY, GAPI] + args, check=True, capture_output=True, text=True,
+    )
+    return json.loads(res.stdout) if res.stdout.strip() else None
+
+
+# ----------------------------------------------------------------------------- build
+
+def dump_postgres(workdir):
+    out = workdir / "kb.sql"
+    with open(out, "wb") as f:
+        run([PG_DUMP, PGDATABASE], stdout=f)
+    return out
+
+
+def snapshot_sqlite(workdir):
+    made = []
+    for db in SQLITE_DBS:
+        src = HOME / ".hermes" / db
+        if not src.exists():
+            continue
+        dst = workdir / db
+        # .backup is the online, consistent snapshot (safe while WAL is active).
+        run([SQLITE3, str(src), f".backup '{dst}'"])
+        made.append(dst)
+    return made
+
+
+def write_restore_guide(workdir, ts):
+    (workdir / "RESTORE.txt").write_text(
+        f"""{{AGENT_NAME_UPPER}} BACKUP — restore guide
+Created: {ts} (America/New_York)
+
+1. Decrypt (passphrase: login keychain `{{AGENT_SLUG}}-backup-key`, or your Bitwarden copy):
+     gpg --pinentry-mode loopback --passphrase '<PASSPHRASE>' \\
+         -d -o bundle.tar.gz {{AGENT_SLUG}}-backup-{ts}.tar.gz.gpg
+2. Extract:
+     tar xzf bundle.tar.gz
+   Contents: .hermes/ (config, skills, scripts, mcp-rag, secrets, tokens)
+             hermes-setup/ (build docs repo incl. .git)   .claude/ (CC memory + global CLAUDE.md)
+             kb.sql (Postgres KB dump)   state.db, kanban.db (consistent snapshots)
+3. Restore KB (Postgres):
+     createdb {PGDATABASE} 2>/dev/null; psql -d {PGDATABASE} -f kb.sql
+4. Restore built-in memory:
+     cp state.db kanban.db ~/.hermes/
+5. Restore config/secrets/code + project docs + CC memory:
+     rsync -a .hermes/ ~/.hermes/
+     rsync -a hermes-setup/ ~/hermes-setup/
+     rsync -a .claude/ ~/.claude/
+6. Re-apply source patches reverted by `hermes update` — see memories
+   your tracked patch list (docs/operations.md).
+"""
+    )
+
+
+def build_bundle(workdir, ts):
+    log("pg_dump KB...")
+    kb = dump_postgres(workdir)
+    log(f"  kb.sql {kb.stat().st_size // 1024} KB")
+
+    log("sqlite snapshots...")
+    snaps = snapshot_sqlite(workdir)
+    log(f"  {', '.join(s.name for s in snaps)}")
+
+    write_restore_guide(workdir, ts)
+
+    bundle = workdir / f"{{AGENT_SLUG}}-backup-{ts}.tar.gz"
+    log("tar (config/code/secrets + dumps)...")
+    extra = [s.name for s in snaps] + ["kb.sql", "RESTORE.txt"]
+    extras_home = [p for p in EXTRA_HOME_PATHS if (HOME / p).exists()]
+    cmd = [TAR, "czf", str(bundle)]
+    for ex in TAR_EXCLUDES:
+        cmd += ["--exclude", ex]
+    cmd += ["-C", str(HOME), ".hermes", *extras_home, "-C", str(workdir)] + extra
+    run(cmd)
+    log(f"  bundle {bundle.stat().st_size // (1024*1024)} MB")
+    return bundle
+
+
+def encrypt(bundle):
+    enc = bundle.with_suffix(bundle.suffix + ".gpg")
+    pw = passphrase()
+    log("gpg encrypt (AES-256)...")
+    subprocess.run(
+        [GPG, "--batch", "--yes", "--pinentry-mode", "loopback",
+         "--passphrase-fd", "0", "--symmetric", "--cipher-algo", "AES256",
+         "-o", str(enc), str(bundle)],
+        check=True, input=pw, text=True,
+    )
+    log(f"  encrypted {enc.stat().st_size // (1024*1024)} MB")
+    return enc
+
+
+# ----------------------------------------------------------------------------- drive
+
+def load_state():
+    if STATE_FILE.exists():
+        try:
+            return json.loads(STATE_FILE.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def save_state(state):
+    STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
+def drive_folder_id():
+    state = load_state()
+    if state.get("folder_id"):
+        return state["folder_id"]
+    q = (f"mimeType = 'application/vnd.google-apps.folder' and "
+         f"name = '{DRIVE_FOLDER_NAME}' and trashed = false")
+    found = gapi(["drive", "search", q, "--raw-query", "--max", "5"]) or []
+    if found:
+        fid = found[0]["id"]
+    else:
+        log(f"creating Drive folder '{DRIVE_FOLDER_NAME}'...")
+        fid = gapi(["drive", "create-folder", DRIVE_FOLDER_NAME])["id"]
+    state["folder_id"] = fid
+    save_state(state)
+    return fid
+
+
+def drive_upload(enc, folder_id):
+    log("uploading to Drive...")
+    res = gapi(["drive", "upload", str(enc), "--parent", folder_id,
+                "--mime-type", "application/octet-stream"])
+    log(f"  uploaded id={res['id']}")
+    return res
+
+
+def prune_drive(folder_id):
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=RETAIN_DRIVE_DAYS)
+    q = f"'{folder_id}' in parents and trashed = false"
+    files = gapi(["drive", "search", q, "--raw-query", "--max", "100"]) or []
+    for f in files:
+        m = NAME_RE.match(f.get("name", ""))
+        if not m:
+            continue  # never touch anything not matching our exact backup name
+        when = datetime.datetime.strptime(m.group(1), "%Y%m%d-%H%M%S")
+        if when < cutoff:
+            log(f"  prune Drive: {f['name']}")
+            gapi(["drive", "delete", f["id"], "--permanent"])
+
+
+def prune_local():
+    LOCAL_BACKUP_DIR.mkdir(exist_ok=True)
+    ours = sorted(
+        [p for p in LOCAL_BACKUP_DIR.glob("{{AGENT_SLUG}}-backup-*.tar.gz.gpg")],
+        key=lambda p: p.name, reverse=True,
+    )
+    for p in ours[RETAIN_LOCAL:]:
+        log(f"  prune local: {p.name}")
+        p.unlink()
+
+
+# ----------------------------------------------------------------------------- main
+
+def main():
+    LOGS.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    log(f"=== backup {ts} start ===")
+    workdir = Path(tempfile.mkdtemp(prefix="{{AGENT_SLUG}}-backup-"))
+    try:
+        bundle = build_bundle(workdir, ts)
+        enc = encrypt(bundle)
+
+        # Keep one local copy (fast restore) before pushing offsite.
+        LOCAL_BACKUP_DIR.mkdir(exist_ok=True)
+        local_copy = LOCAL_BACKUP_DIR / enc.name
+        shutil.copy2(enc, local_copy)
+        log(f"local copy -> {local_copy}")
+
+        folder_id = drive_folder_id()
+        drive_upload(enc, folder_id)
+        prune_drive(folder_id)
+        prune_local()
+        log(f"=== backup {ts} OK ===")
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except subprocess.CalledProcessError as e:
+        log(f"FAILED: {e.cmd[:3]}... rc={e.returncode}")
+        if e.stderr:
+            log(f"stderr: {e.stderr[-500:]}")
+        sys.exit(1)
+    except Exception as e:
+        log(f"FAILED: {e}")
+        sys.exit(1)
