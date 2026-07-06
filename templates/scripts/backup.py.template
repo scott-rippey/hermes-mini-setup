@@ -7,7 +7,7 @@
 Bundles the irreplaceable, box-only state into ONE gpg-encrypted tarball and
 uploads it to an "{{AGENT_NAME}} Backups" folder in the agent account's Drive (offsite):
 
-  1. Postgres KB     -> pg_dump of the `ironclaw` DB (customers/people/apps/
+  1. Postgres KB     -> pg_dump of the `{{KB_DB_NAME}}` DB (customers/people/apps/
                         meetings/documents + embeddings)  -> kb.sql
   2. Built-in memory -> consistent sqlite snapshots of state.db (+ kanban.db)
   3. Config / code / secrets -> tar of ~/.hermes (config.yaml, SOUL.md, skills/,

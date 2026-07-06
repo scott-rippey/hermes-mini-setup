@@ -50,10 +50,10 @@ BEGIN
   END IF;
 
   -- current_setting(missing_ok=true) returns NULL if unset
-  allow := current_setting('ironclaw.allow_identity_write', true);
+  allow := current_setting('kb.allow_identity_write', true);
 
   IF allow IS DISTINCT FROM 'yes' THEN
-    RAISE EXCEPTION 'Write rejected: identity file % is protected. Set ironclaw.allow_identity_write=yes within a transaction (SET LOCAL) to override. Used by sync-from-disk.sh only.', NEW.path
+    RAISE EXCEPTION 'Write rejected: identity file % is protected. Set kb.allow_identity_write=yes within a transaction (SET LOCAL) to override — reserved for deliberate identity-sync tooling.', NEW.path
       USING ERRCODE = 'check_violation';
   END IF;
 
