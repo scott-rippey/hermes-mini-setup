@@ -18,7 +18,7 @@ Deterministic (no LLM) except ONE clearly-labeled section. Subject flips to ⚠�
 | Cron health | The **gateway process** + every job from its log: backup, meeting pipeline, docs-sync, brief, **the 15-min prep poller (staleness >35m = FAIL)**, per-call report outcomes, and yesterday's own digest |
 | **Docs repo push** | State-based: no upstream / unpushed commits / uncommitted files ⇒ FAIL |
 | Agent activity | Sessions, tool calls, tokens (the real signal on a flat-rate plan; est-cost is a footnote) |
-| Knowledge base | New docs/meetings in 24h + totals |
+| Knowledge base | Filed docs vs GitHub-synced docs (each +24h/total — the docs-sync inflates a single "documents" number), chunks as embedded total, meetings +24h/total |
 | Backup | Last bundle name/size/age |
 | **System changes** | The 3:05 ledger snapshot's diffstat + the **AI narrative** — the one synthesized section, hard-grounded (statements must be diff-evidenced; unsure ⇒ omit) with the raw diffstat always rendered beneath as checkable truth |
 | **Memory stores** | A daily mirror of the memory tool's drift check (format round-trip + budgets + refused-write detection) — run from *outside* the agent |

@@ -299,14 +299,20 @@ def agent_activity():
 def kb_growth():
     rows = pg(
         "SELECT "
-        "(SELECT count(*) FROM memory_documents WHERE created_at > now()-interval '1 day'), "
-        "(SELECT count(*) FROM memory_documents), "
+        # Filed docs vs synced docs, split: the nightly GitHub docs-sync files every
+        # watched repo's CLAUDE.md + docs/ as individual documents, which inflates a
+        # single "documents" number far past what the operator hand-filed.
+        "(SELECT count(*) FROM memory_documents WHERE coalesce(metadata->>'source','') <> 'github' AND created_at > now()-interval '1 day'), "
+        "(SELECT count(*) FROM memory_documents WHERE coalesce(metadata->>'source','') <> 'github'), "
+        "(SELECT count(*) FROM memory_documents WHERE metadata->>'source' = 'github' AND created_at > now()-interval '1 day'), "
+        "(SELECT count(*) FROM memory_documents WHERE metadata->>'source' = 'github'), "
+        "(SELECT count(*) FROM memory_chunks), "
         "(SELECT count(*) FROM meetings WHERE created_at > now()-interval '1 day'), "
         "(SELECT count(*) FROM meetings), "
         "(SELECT count(*) FROM customers), "
         "(SELECT count(*) FROM people), "
         "(SELECT count(*) FROM apps);")
-    return rows[0] if rows else ["0"] * 7
+    return rows[0] if rows else ["0"] * 10
 
 
 # ----------------------------------------------------------------------------- backup status
@@ -504,11 +510,14 @@ def render(date_str, cron, sync_totals, total, by_source, by_model, kb, backup,
     H.append(split_table("by model", by_model))
 
     # KB growth
-    nd, td, nm, tm, tc, tp, ta = kb
+    nf, tf, ng, tg, tch, nm, tm, tc, tp, ta = kb
     H.append(section("Knowledge base"))
     H.append(f'<table style="width:100%;border-collapse:collapse;font-size:13px">')
-    H.append(kv("New documents (24h)", f"+{fmt_int(nd)} <span style='color:{FAINT};font-weight:400'>"
-                f"({fmt_int(td)} total)</span>"))
+    H.append(kv("Filed docs (24h)", f"+{fmt_int(nf)} <span style='color:{FAINT};font-weight:400'>"
+                f"({fmt_int(tf)} total)</span>"))
+    H.append(kv("GitHub-synced docs (24h)", f"+{fmt_int(ng)} <span style='color:{FAINT};font-weight:400'>"
+                f"({fmt_int(tg)} total)</span>"))
+    H.append(kv("Chunks (embedded)", fmt_int(tch)))
     H.append(kv("New meetings (24h)", f"+{fmt_int(nm)} <span style='color:{FAINT};font-weight:400'>"
                 f"({fmt_int(tm)} total)</span>"))
     H.append(kv("Customers · people · apps", f"{fmt_int(tc)} · {fmt_int(tp)} · {fmt_int(ta)}"))

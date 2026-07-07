@@ -142,7 +142,8 @@ def write_restore_guide(workdir, ts):
         f"""{{AGENT_NAME_UPPER}} BACKUP — restore guide
 Created: {ts} (America/New_York)
 
-1. Decrypt (passphrase: login keychain `{{AGENT_SLUG}}-backup-key`, or your Bitwarden copy):
+1. Decrypt (passphrase: login keychain `{{AGENT_SLUG}}-backup-key`, or your off-box
+   copy — the password/secrets manager entry you made on day 1):
      gpg --pinentry-mode loopback --passphrase '<PASSPHRASE>' \\
          -d -o bundle.tar.gz {{AGENT_SLUG}}-backup-{ts}.tar.gz.gpg
 2. Extract:
