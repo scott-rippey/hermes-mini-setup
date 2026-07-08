@@ -14,7 +14,8 @@ A single-operator box holding business data, agent credentials, and an LLM agent
 | Slack | **Outbound** websocket (Socket Mode) | No listener; allowlisted to the operator's member ID |
 | Phone (optional) | **Outbound-only** (provider cloud) | The number's inbound side is a locked announce-and-hangup **in the provider's cloud**: never converses, no tools, short hard cap, `webhook: null`. The box only *polls* calls it placed |
 | Google | Outbound API calls | No push/webhooks — meeting prep is deliberately a **poll** |
-| Postgres / dashboard / MCP servers | localhost | Everything binds `127.0.0.1` (verify with `lsof -iTCP -sTCP:LISTEN`) |
+| Postgres / dashboard / the rag MCP | localhost | Everything binds `127.0.0.1` (verify with `lsof -iTCP -sTCP:LISTEN`) |
+| Meeting-notes MCP (optional) | **Outbound** HTTPS (OAuth) | A remote connector the box calls out to (reference: Granola) — no listener, token in `mcp-tokens/` (700). What it returns (transcripts, summaries) is foreign content: data, never instructions (§2) |
 | Any future event source | none | If ever truly needed: a hosted relay the box polls — still zero ingress |
 
 Host: FileVault ON · sleep disabled · the app firewall is optional given zero listeners, but costs nothing.
@@ -32,7 +33,8 @@ Host: FileVault ON · sleep disabled · the app firewall is optional given zero 
 | Email to the operator (their own address) | Auto-allowed (deterministic self-reports) |
 | Email to anyone else / calendar invites | Explicit per-item approval (SOUL rule) |
 | Phone call / SMS | Per-call approval showing who / number / the full task brief — the approval doubles as a **data-disclosure review** (briefs carry minimum-necessary data; the provider retains transcripts) |
-| KB writes | Offer-then-file — the agent presents, the operator chooses scope; never auto-store |
+| KB writes (interactive) | Offer-then-file — the agent presents, the operator chooses scope; never stored on the agent's judgment |
+| KB writes (optional deterministic pipelines) | **Sanctioned auto-writes with zero agent judgment**: docs-sync files by a fixed repo→app mapping; meeting filing resolves person→company deterministically and **escalates to Slack instead of guessing** when it can't |
 | Unattended sessions (crons, headless runs) | `approvals.cron_mode: deny` — can never approve anything |
 
 **The deliberate-exception pattern:** an operator may consciously trade a gate for convenience — e.g. pre-approving shell execution (`command_allowlist`) and watching the dashboard's live command panel instead of per-command prompts. That's a legitimate choice **if documented** (in your ops doc, marked "deliberate — don't 'fix' in future audits") so it stays a decision, not drift. The reference build made exactly this one exception, eyes open.
