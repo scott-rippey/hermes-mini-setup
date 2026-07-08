@@ -40,3 +40,18 @@ Restart the gateway after wiring.
 1. Agent lists tools → all `mcp_rag_*` present.
 2. Store a test doc under a test identity → semantic-search finds it → `get` returns it → delete the test row.
 3. Confirm the scoping rule made it into SOUL: every store names an explicit customer/identity.
+
+## Optional: GitHub docs-sync (`github_docs_sync.py.template`)
+
+The nightly, **deterministic / no-AI** cron that keeps the KB current on the operator's own apps: for every `apps` row with a `repo`, it pulls `CLAUDE.md` + `docs/**` into the KB under that app. A **sanctioned auto-write** (fixed repo→app mapping, no agent judgment) — distinct from the human-gated filing tools.
+
+What makes it cheap and safe (keep these properties when adapting):
+- **SHA change-detection:** each doc's git blob SHA is stored in its KB metadata; unchanged files are skipped — no download, no re-embed, no cost. The only API call for an unchanged repo is one tree listing.
+- **Prune is scoped to `metadata->>'source' = 'github'`** — docs the agent or operator filed under an app are never deleted when the repo changes.
+- **Read-only PATs, one per GitHub owner**, in the keychain as `github-pat-<owner>` (account `{{AGENT_SLUG}}`): fine-grained, Contents:read only. The operator creates each PAT and stores it via the **Terminal keychain ceremony** (Gotcha #2 — never through the agent shell).
+
+Install (Phase 8, if selected):
+1. Instantiate next to `server.py` (it imports `server` for `_store`/`_connect`/namespace).
+2. Register each app: `add_app` with its `owner/repo`, then the PAT ceremony for any new owner.
+3. Hand-test: `.venv/bin/python github_docs_sync.py <app-slug>` — expect `added`/`unchanged` lines and a per-app summary.
+4. Schedule nightly via `templates/launchd/job.plist.template` (reference: `ai.hermes.github-docs-sync` @ 9pm, before the 10pm meeting-reports run).

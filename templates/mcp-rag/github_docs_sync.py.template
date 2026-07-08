@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""Sync GitHub docs (CLAUDE.md + docs/**) into the KB, per app. Deterministic — NO AI.
+
+For every row in `apps` that has a `repo`, this:
+  1. reads a read-only PAT from the macOS keychain (service `github-pat-<owner>`),
+  2. lists the repo tree once and keeps only CLAUDE.md + docs/** files,
+  3. for each doc, compares its git blob SHA to the SHA stored in the KB doc's
+     metadata — UNCHANGED files are skipped (no download, no re-embed, no cost),
+  4. stores new/changed docs under the app (and, via the app, its business),
+  5. prunes KB docs whose file was removed from the repo.
+
+Run by a nightly cron. It reuses server.py for embedding + storage. The only
+external API call for unchanged repos is the one-shot tree listing.
+
+Usage:
+  ~/.hermes/mcp-rag/.venv/bin/python ~/.hermes/mcp-rag/github_docs_sync.py [app-slug ...]
+  (no args = sync every app with a repo)
+"""
+import base64
+import json
+import subprocess
+import sys
+import urllib.request
+import urllib.error
+
+import server  # _store, _connect, NAMESPACE  (loads .env for OPENAI/PG)
+
+GH_API = "https://api.github.com"
+API_VERSION = "2022-11-28"
+DOC_ROOT_FILES = {"CLAUDE.md"}
+DOC_PREFIXES = ("docs/",)
+
+
+def _keychain_pat(owner: str) -> str | None:
+    """Read the read-only PAT for a GitHub account from the agent's keychain."""
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-a", "{{AGENT_SLUG}}", "-s", f"github-pat-{owner}", "-w"],
+            capture_output=True, text=True,
+        )
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _gh(url: str, token: str) -> dict:
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": API_VERSION,
+        "User-Agent": "hermes-docs-sync",
+    })
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())
+
+
+def _is_doc(path: str) -> bool:
+    return path in DOC_ROOT_FILES or any(path.startswith(p) for p in DOC_PREFIXES)
+
+
+def sync_app(app: dict) -> dict:
+    repo = app["repo"]
+    owner = repo.split("/")[0]
+    token = _keychain_pat(owner)
+    if not token:
+        print(f"[{app['slug']}] SKIP — no keychain PAT 'github-pat-{owner}'")
+        return {"app": app["slug"], "error": "no PAT"}
+
+    info = _gh(f"{GH_API}/repos/{repo}", token)
+    branch = info["default_branch"]
+    tree = _gh(f"{GH_API}/repos/{repo}/git/trees/{branch}?recursive=1", token)
+    if tree.get("truncated"):
+        print(f"[{app['slug']}] WARNING: repo tree truncated — some docs may be missed")
+    files = [t for t in tree.get("tree", []) if t.get("type") == "blob" and _is_doc(t["path"])]
+
+    # existing KB docs for this app: title(path) -> stored sha
+    existing = {}
+    with server._connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT path, metadata->>'sha' FROM memory_documents "
+            "WHERE user_id = %s AND app_id = (SELECT id FROM apps WHERE slug = %s) "
+            "AND metadata->>'source' = 'github'",  # only prune docs WE synced from GitHub — leave human/agent notes alone
+            (server.NAMESPACE, app["slug"]),
+        )
+        existing = {row[0]: row[1] for row in cur.fetchall()}
+
+    synced = skipped = pruned = 0
+    current_titles = set()
+    for f in files:
+        path, sha = f["path"], f["sha"]
+        title = f"{app['name']} — {path}"
+        if f.get("size", 0) == 0:   # empty file: nothing to embed. Not added to current_titles,
+            continue                # so if it had content before and was emptied, it gets pruned below.
+        current_titles.add(title)
+        if existing.get(title) == sha:
+            skipped += 1
+            continue
+        blob = _gh(f"{GH_API}/repos/{repo}/git/blobs/{sha}", token)  # base64 content by SHA
+        content = base64.b64decode(blob["content"]).decode("utf-8", "replace")
+        if not content.strip():     # whitespace-only safety net
+            continue
+        res = server._store(content, title, app=app["slug"],
+                            metadata={"source": "github", "repo": repo, "branch": branch, "path": path, "sha": sha})
+        if res.get("error"):
+            print(f"[{app['slug']}] ERROR storing {path}: {res['error']}")
+        else:
+            synced += 1
+            print(f"[{app['slug']}] {'updated' if title in existing else 'added'} {path}")
+
+    # prune docs whose file is gone from the repo
+    with server._connect() as conn, conn.cursor() as cur:
+        for title in existing:
+            if title not in current_titles:
+                cur.execute("DELETE FROM memory_documents WHERE user_id = %s AND path = %s",
+                            (server.NAMESPACE, title))
+                pruned += 1
+                print(f"[{app['slug']}] pruned {title}")
+
+    print(f"[{app['slug']}] done — {synced} synced, {skipped} unchanged, {pruned} pruned ({repo}@{branch})")
+    return {"app": app["slug"], "synced": synced, "skipped": skipped, "pruned": pruned}
+
+
+def main():
+    wanted = set(sys.argv[1:])
+    with server._connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT slug, name, repo FROM apps WHERE repo IS NOT NULL ORDER BY name")
+        apps = [{"slug": r[0], "name": r[1], "repo": r[2]} for r in cur.fetchall()]
+    if wanted:
+        apps = [a for a in apps if a["slug"] in wanted]
+    if not apps:
+        print("no apps with a repo to sync")
+        return
+    for app in apps:
+        try:
+            sync_app(app)
+        except urllib.error.HTTPError as e:
+            print(f"[{app['slug']}] HTTP {e.code} on {repr(getattr(e, 'url', '?'))}: {e.reason}")
+        except Exception as e:
+            print(f"[{app['slug']}] ERROR: {type(e).__name__}: {e}")
+
+
+if __name__ == "__main__":
+    main()

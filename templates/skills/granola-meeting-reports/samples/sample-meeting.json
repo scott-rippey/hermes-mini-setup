@@ -1,0 +1,58 @@
+{
+  "base": "2026-05-14 - Kickoff planning w Alex Rivera",
+  "title": "2026-05-14 - Kickoff planning w/ Alex Rivera",
+  "displayTitle": "Kickoff planning w/ Alex Rivera",
+  "date": "2026-05-14",
+  "time": "10:00 AM",
+  "meeting_type": "client_working_session",
+  "counterpart": "Alex Rivera",
+  "counterpart_inferred": true,
+  "counterpart_note": "Counterpart taken from the meeting title (\"w/ Alex Rivera\"); speakers in the transcript are labeled Me/Them only.",
+  "people_mentioned": ["Alex Rivera", "Jordan Lee"],
+  "tools_products": ["Acme Scheduler", "Stripe", "Slack"],
+  "meeting_id": "00000000-0000-4000-8000-000000000000",
+  "filed_company": "Acme Fitness",
+  "generated": "2026-05-14",
+  "tags": ["kickoff", "scheduling", "payments", "onboarding"],
+  "tldr": "The operator and Alex Rivera scoped the first phase of the Acme Fitness scheduling rollout: member-facing booking ships before staff tooling, Stripe stays the payment rail, and Alex owns getting the class catalog exported by Friday. Timeline pressure comes from the June open-house, so both agreed to cut the waitlist feature from phase one.",
+  "topics": [
+    {
+      "h": "Phase-one scope: booking before staff tools",
+      "p": [
+        "Alex pushed to ship the member-facing booking flow first because the June open-house is the hard date; staff-side schedule management can trail by two weeks without hurting the launch.",
+        "The operator flagged that reversing the order would double integration testing, since the staff tools read the same availability data the booking flow writes. Alex accepted the sequencing on that basis."
+      ]
+    },
+    {
+      "h": "Payments stay on Stripe",
+      "p": [
+        "Alex raised a processor switch his bookkeeper suggested, but the existing Stripe account already holds the member payment methods; migrating them mid-rollout adds risk with no launch benefit. Decision was to revisit after the open-house."
+      ]
+    }
+  ],
+  "decisions": [
+    "Member-facing booking ships first; staff tooling follows ~2 weeks later - because the June open-house is the immovable date.",
+    "Stripe remains the payment rail through launch; processor evaluation parked until after the open-house."
+  ],
+  "actions": [
+    ["Alex Rivera", "Export the current class catalog (names, capacity, instructors) and send it over", "by Friday"],
+    ["Operator", "Draft the booking-flow wireframe from the catalog", "next week"],
+    ["?", "Confirm whether Jordan Lee handles the front-desk training", "before launch"]
+  ],
+  "quotes": [
+    { "q": "If members can't book by the open-house, the rest of it doesn't matter.", "a": "Alex Rivera" },
+    { "q": "Every feature we add before June is a feature we're debugging in June.", "a": "Operator" }
+  ],
+  "open_questions": [
+    "Does the waitlist feature return in phase two, or is capacity overflow handled manually?",
+    "Who owns member-data cleanup from the old spreadsheet system?"
+  ],
+  "people_entities": [
+    "**Counterpart:** Alex Rivera (from title) - owner, Acme Fitness.",
+    "**Others mentioned:** Jordan Lee - front desk, role stated in passing.",
+    "**Tools/products:** Acme Scheduler (working name for the build), Stripe, Slack."
+  ],
+  "glossary": [
+    ["acme schedule er / acne scheduler", "Acme Scheduler"]
+  ]
+}

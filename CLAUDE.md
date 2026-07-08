@@ -60,7 +60,7 @@ You do: audit installed skills, then `skills.disabled` in config.yaml down to th
 
 ## Phase 8 — Daily intelligence (crons)
 
-You do, one at a time (build → hand-test → schedule from `templates/launchd/`): **morning brief** (gather + synthesize + HTML email), **ops digest** (deterministic all-systems health: gateway, every cron, memory-store drift checks, repo push state — *silence is never success*), **meeting prep** (15-min poll, ~2h window; poll, never a calendar webhook — no public endpoints, ever). Optional per Phase 0: meeting-notes pipeline, customer-docs sync, traffic-aware "leave by" (Google Routes key ceremony; OSM keyless fallback ships regardless). Space the schedule; avoid colliding minutes. **Gate:** each job's first scheduled run verified in its log + the inbox.
+You do, one at a time (build → hand-test → schedule from `templates/launchd/`): **morning brief** (gather + synthesize + HTML email), **ops digest** (deterministic all-systems health: gateway, every cron, memory-store drift checks, repo push state — *silence is never success*), **meeting prep** (15-min poll, ~2h window; poll, never a calendar webhook — no public endpoints, ever). Optional per Phase 0: meeting-notes pipeline (`templates/skills/granola-meeting-reports/` — MCP wiring + TTY-login note in `templates/skills/README.md`), customer-docs sync (`templates/mcp-rag/github_docs_sync.py.template` — install notes in `templates/mcp-rag/README.md`), traffic-aware "leave by" (Google Routes key ceremony; OSM keyless fallback ships regardless). Space the schedule; avoid colliding minutes. **Gate:** each job's first scheduled run verified in its log + the inbox.
 
 ## Phase 9 — Backups, ledger, self-push (do NOT skip)
 
