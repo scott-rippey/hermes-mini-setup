@@ -265,7 +265,17 @@ def cron_health():
         ("Call reports", "call-reports.log", "per call", parse_callreports),
         ("Ops digest (prev)", "ops-digest.log", "8:10a", parse_opsdigest),
     ]
+    # Optional-feature rows: no installed artifact on this box = feature not
+    # selected -> no row (a missing/stale log for an INSTALLED feature still FAILs).
+    optional_markers = {
+        "Meeting reports": HOME / ".hermes/skills/productivity/granola-meeting-reports",
+        "GitHub docs sync": HOME / ".hermes/mcp-rag/github_docs_sync.py",
+        "Call reports": HOME / ".hermes/skills/productivity/telephony",
+    }
     for label, logf, sched, parser in jobs:
+        marker = optional_markers.get(label)
+        if marker is not None and not marker.exists():
+            continue
         res = parser(LOGS / logf)
         if label == "GitHub docs sync":
             status, detail, when, sync_totals = res
@@ -515,8 +525,9 @@ def render(date_str, cron, sync_totals, total, by_source, by_model, kb, backup,
     H.append(f'<table style="width:100%;border-collapse:collapse;font-size:13px">')
     H.append(kv("Filed docs (24h)", f"+{fmt_int(nf)} <span style='color:{FAINT};font-weight:400'>"
                 f"({fmt_int(tf)} total)</span>"))
-    H.append(kv("GitHub-synced docs (24h)", f"+{fmt_int(ng)} <span style='color:{FAINT};font-weight:400'>"
-                f"({fmt_int(tg)} total)</span>"))
+    if (HOME / ".hermes/mcp-rag/github_docs_sync.py").exists():
+        H.append(kv("GitHub-synced docs (24h)", f"+{fmt_int(ng)} <span style='color:{FAINT};font-weight:400'>"
+                    f"({fmt_int(tg)} total)</span>"))
     H.append(kv("Chunks (embedded)", fmt_int(tch)))
     H.append(kv("New meetings (24h)", f"+{fmt_int(nm)} <span style='color:{FAINT};font-weight:400'>"
                 f"({fmt_int(tm)} total)</span>"))

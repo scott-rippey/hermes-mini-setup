@@ -21,7 +21,7 @@ Interview the operator conversationally (a few questions per turn, not a form). 
 - **Them:** name, business name + one-line what-it-does, role, location/timezone, email domain
 - **Their agent:** name (their "Sidekick"), voice/personality preferences (concise? pushy-with-reasons? formal?)
 - **Work shape:** what they want channels for (default: general / research / proposals — adapt), who their customers are (companies? individuals?), what a typical deliverable is
-- **Feature selections:** phone calls? meeting-notes tool (Granola or none)? customer-repo docs sync? traffic-aware ETAs?
+- **Feature selections — ask about ONLY these four; everything else (KB, Slack, Google, research/scraping skills, briefs/digest/prep, backups/ledger) is core and installs for everyone:** phone calls (Bland)? · meeting-notes pipeline (needs their own Granola account — or none)? · customer-repo docs sync (**ask only if they build/maintain software for customers; otherwise skip silently**)? · traffic-aware ETAs (Google Routes key — the keyless OSM fallback ships regardless)?
 - **Identities:** their personal-work KB slug (their `me`-equivalent) — plus `general` for non-customer research
 
 From the answers, **generate** (templates in `templates/identity/`):
