@@ -58,6 +58,16 @@ When the counterpart can't be resolved, post with `hermes send -t slack:#general
 
 Then stop for that meeting (its HTML still goes to the manifest in step 5, so it appears in the next brief marked unassigned). When {{OPERATOR_FIRST_NAME}} replies, file it with the person/customer he names.
 
+## Glossary escalation (same channel — ask once, learn forever)
+After the run has filed (or escalated) its meetings, collect every flagged term across the reports just authored (`[best guess]` / `[unverified]`). If there are any, post ONE message for the whole run to Slack #general:
+
+> Meeting report "<title>" (<date>) filed with <N> flagged term(s): "<as heard>" -> "<best guess>" [best guess]; "<context of the garbled bit>" [unverified]. Reply with corrections (or "all correct") and I'll re-file and remember them.
+
+Never block or delay filing on an unanswered glossary question — flags stay in the filed report until answered. When {{OPERATOR_FIRST_NAME}} replies (typically the next morning, in a fresh session — the Slack thread carries all needed context):
+1. Apply the corrections to the content JSON, re-render, re-file via `add_meeting` (same `meeting_id` — idempotent upsert; the corrected report replaces the KB doc).
+2. Add each confirmed term to the master glossary (AUTHORING.md, "Master glossary" table) so it is never asked again. "All correct" confirmations go in too — a confirmed `[best guess]` becomes a plain glossary row.
+3. Do NOT re-append to `state/pending-brief.json` (the original already rode a brief); confirm the correction in the chat thread instead.
+
 ## Hand-off to the morning brief
 After rendering, append one entry per report to `state/pending-brief.json` (a JSON array; create as `[]` if missing). Put the **contents of `html/<base>.html`** in the `html` field:
 

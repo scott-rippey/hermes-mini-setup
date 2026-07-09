@@ -123,6 +123,7 @@ Keep a master glossary in this file (seed below - it accretes with every run). M
 - Columns: "Possibly heard as" -> "Correct term" -> Notes. The left column lists representative mishears, NOT exact strings; also fix close phonetic/spelling variants of the same term.
 - Mark uncertainty with `[best guess]` or `[unverified]`; never "correct" a term into something the audio does not support.
 - Each run: normalize any listed term, add new mistranscriptions you resolve, and optionally list the applied fixes in the note's own Glossary section.
+- Terms still flagged `[best guess]`/`[unverified]` after authoring get surfaced to {{OPERATOR_FIRST_NAME}} in Slack after filing (SKILL.md, "Glossary escalation"); confirmations are applied via an idempotent re-file AND added to the master glossary below - each term is asked at most once, ever.
 - Counterpart names never need glossary entries (they come from the title). The People part of the glossary is for third parties only.
 
 ---
