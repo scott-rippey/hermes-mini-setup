@@ -38,6 +38,7 @@ Trigger when {{OPERATOR_FIRST_NAME}} says "process my latest Granola meeting", "
 4. **Render.** `node render.js <content.json>` -> `markdown/<base>.md` + `html/<base>.html`.
 5. **Hand off for delivery — ALWAYS** (regardless of filing outcome): append the report to `state/pending-brief.json` with its **HTML** so the 8am brief delivers it inline (see Hand-off).
 6. **Resolve + file** via `add_meeting` (below). Record the meeting ID in `state/processed.json`.
+7. **Glossary escalation — part of every run, never skip:** after all meetings are filed, if ANY authored report carries `[best guess]` / `[unverified]`, post the one-message escalation to Slack #general (section below). If you delegated authoring or filing to a subagent, this step still belongs to YOU — the outer run owns steps 5-7.
 
 ## Filing — resolution and the two cases
 File with `mcp_rag add_meeting` — stores the searchable markdown AND upserts the `meetings` row (linked to customer, person, and the KB doc). Use `add_meeting`, NOT `store`:
