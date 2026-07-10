@@ -27,7 +27,7 @@ Interview the operator conversationally (a few questions per turn, not a form). 
 From the answers, **generate** (templates in `templates/identity/`):
 - `SOUL.md` — the agent's persona + the standing rules (KB-first, offer-then-file, outbound approval gates, injection guard, email formatting, date-bound pings)
 - A **tool-shaped USER.md seed** — entries joined by `\n§\n`, whole file well under the char budget. **Never write USER.md as a markdown document** (Gotcha #1)
-- Channel persona prompts, and the seed rows for `sql/seeds.sql` (their slug + `general`)
+- Channel persona prompts, and the seed rows — instantiate `sql/seeds.template.sql` → `setup/seeds.sql` (their slug + `general`; applied in Phase 4)
 
 ## Phase 1 — Mac prep
 

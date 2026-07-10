@@ -16,6 +16,7 @@ Every `{{PLACEHOLDER}}` used across `templates/`, and where its value comes from
 | `{{PRIVATE_DOCS_REMOTE}}` | Their **private** GitHub repo for docs self-push | owner/agent-backup |
 | `{{CC_MEMORY_DIR}}` | Claude Code project-memory dir (machine-specific, under `~/.claude/projects/…/memory`) | — |
 | `{{HOME}}` / `{{HERMES_VENV_PYTHON}}` | Absolute home dir / the platform venv python | /Users/… |
+| `{{MAC_USERNAME}}` | The dedicated macOS user created in Phase 1 (appears in absolute paths, e.g. the mcp-rag `config.yaml` wiring) | "agentbox" |
 | `{{JOB}}` / `{{SCRIPT}}` / `{{HOUR}}` / `{{MINUTE}}` | launchd instantiation values (schedule table in job.plist.template) | — |
 | `{{TIMEZONE}}` / `{{LOCATION}}` | From the interview | — |
 | `{{ROLE}}` / `{{BACKGROUND_BRIEF}}` / `{{WORK_TYPES}}` / `{{STACK_LIST}}` / `{{QUALITY_BAR}}` / `{{DELIVERABLE_FOCUS}}` / `{{VOICE_EXTRAS}}` | Interview-derived profile/persona content | — |
