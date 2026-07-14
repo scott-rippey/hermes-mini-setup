@@ -343,6 +343,18 @@ def gmail_get(args):
 
 
 
+def _ensure_owner_cc(message):
+    """Standing rule (SOUL): the operator is CC'd on any email not already addressed to them.
+    Applied to every outbound message — send and reply paths both."""
+    _owner = "{{OPERATOR_EMAIL}}"
+    if _owner.lower() in f"{message.get('To', '')},{message.get('Cc', '')}".lower():
+        return
+    if message.get("Cc"):
+        message.replace_header("Cc", f"{message['Cc']}, {_owner}")
+    else:
+        message["Cc"] = _owner
+
+
 def _compose_email(args):
     """Build a Gmail MIME message. Returns a multipart message when --attach is
     given (body + file attachments), otherwise a plain MIMEText (unchanged behavior)."""
@@ -369,15 +381,11 @@ def _compose_email(args):
         message = MIMEText(args.body, "html" if args.html else "plain")
     message["To"] = args.to
     message["Subject"] = args.subject
-    cc = getattr(args, "cc", "") or ""
-    # Standing rule (SOUL): the operator is CC'd on any email not already addressed to them.
-    _owner = "{{OPERATOR_EMAIL}}"
-    if _owner.lower() not in f"{args.to},{cc}".lower():
-        cc = f"{cc}, {_owner}" if cc else _owner
-    if cc:
-        message["Cc"] = cc
+    if getattr(args, "cc", ""):
+        message["Cc"] = args.cc
     if getattr(args, "from_header", ""):
         message["From"] = args.from_header
+    _ensure_owner_cc(message)
     return message
 
 
@@ -437,6 +445,7 @@ def gmail_reply(args):
         if headers.get("message-id"):
             message["In-Reply-To"] = headers["message-id"]
             message["References"] = headers["message-id"]
+        _ensure_owner_cc(message)
 
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
         result = _run_gws(
@@ -466,6 +475,7 @@ def gmail_reply(args):
     if headers.get("message-id"):
         message["In-Reply-To"] = headers["message-id"]
         message["References"] = headers["message-id"]
+    _ensure_owner_cc(message)
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
     body = {"raw": raw, "threadId": original["threadId"]}
