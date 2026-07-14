@@ -369,8 +369,13 @@ def _compose_email(args):
         message = MIMEText(args.body, "html" if args.html else "plain")
     message["To"] = args.to
     message["Subject"] = args.subject
-    if getattr(args, "cc", ""):
-        message["Cc"] = args.cc
+    cc = getattr(args, "cc", "") or ""
+    # Standing rule (SOUL): the operator is CC'd on any email not already addressed to them.
+    _owner = "{{OPERATOR_EMAIL}}"
+    if _owner.lower() not in f"{args.to},{cc}".lower():
+        cc = f"{cc}, {_owner}" if cc else _owner
+    if cc:
+        message["Cc"] = cc
     if getattr(args, "from_header", ""):
         message["From"] = args.from_header
     return message

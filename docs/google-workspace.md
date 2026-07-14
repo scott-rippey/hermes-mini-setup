@@ -17,7 +17,7 @@ Why split: reads against the operator's mailbox need their identity but **must n
 2. **GCP:** one project; OAuth consent **Internal** (Workspace-only — skips unverified-app friction; note it *rejects* personal-Gmail logins by design); a desktop OAuth client; secret to `~/.hermes/google_client_secret.json`.
 3. **Install the modified scripts** from [templates/google-workspace/](../templates/google-workspace/) over the bundled skill's — they add the per-op two-account routing, repeatable `--attach` + `--html` sending, and calendar attendees (meeting prep needs them).
 4. **Auth both lanes:** `setup.py --account read` (as the operator) and `--account send` (as the agent). Adding a scope later = re-auth that account.
-5. **Send policy** (SOUL + convention): `gmail.send` exists to email **the operator only** — deterministic self-reports are auto-allowed; any other recipient is per-item approval.
+5. **Send policy** (SOUL + convention): `gmail.send` exists to email **the operator only** — deterministic self-reports are auto-allowed; any other recipient is per-item approval. Approved external sends **auto-CC the operator**: `_compose_email` appends their address whenever it isn't already in To/Cc, so the copy survives even if the agent forgets the SOUL rule.
 
 ## Auth gotchas (earned)
 
