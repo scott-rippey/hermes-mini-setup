@@ -132,32 +132,38 @@ def parse_brief(path):
 
 
 def parse_meetings(path):
+    # The log body is agent prose (an LLM narrating its run) — never grade it by
+    # keyword. Only the deterministic marker appended by run_with_marker.sh counts.
     lines = _tail(path)
     if not lines:
         return "none", "no run yet (first launchd run tonight 10p)", None
-    text = "\n".join(lines)
-    if re.search(r"error|traceback|failed", text, re.I):
-        last = next((l for l in reversed(lines) if l.strip()), "")
-        return "fail", last.strip()[:80], _last_run_when(path)
-    last = next((l for l in reversed(lines) if l.strip()), "ran")
-    return "ok", last.strip()[:80], _last_run_when(path)
+    marker = next((l.strip() for l in reversed(lines)
+                   if re.match(r"=== meeting-reports \d{8}-\d{6} (OK|FAILED)", l.strip())), None)
+    if marker is None:
+        return "fail", "ran, no OK marker (run died or wrapper missing)", _last_run_when(path)
+    if " OK " in marker:
+        return "ok", "agent run completed (exit 0)", _last_run_when(path)
+    return "fail", marker.strip("= ")[:80], _last_run_when(path)
 
 
 def parse_sync(path):
+    # Runs aren't delimited in the log, so a tail window can span several nights —
+    # grade ONLY the last end-of-run marker the sync script prints (it aggregates
+    # every per-app outcome, incl. HTTP errors and missing PATs).
     lines = _tail(path, 60)
     if not lines:
         return "none", "no run yet", None, (0, 0, 0)
-    done = re.findall(r"done — (\d+) synced, (\d+) unchanged, (\d+) pruned", "\n".join(lines))
-    if not done:
-        return "fail", "no completion lines", _last_run_when(path), (0, 0, 0)
-    # last run = the trailing block (one line per app)
-    apps = len(done)
-    synced = sum(int(s) for s, _, _ in done)
-    pruned = sum(int(p) for _, _, p in done)
-    errs = len(re.findall(r"error|failed|traceback", "\n".join(lines), re.I))
-    status = "fail" if errs else "ok"
-    detail = f"{apps} apps · {synced} synced · {pruned} pruned"
-    return status, detail, _last_run_when(path), (apps, synced, pruned)
+    marker = next((l.strip() for l in reversed(lines)
+                   if re.match(r"=== docs-sync \d{8}-\d{6} (OK|FAILED)", l.strip())), None)
+    if marker is None:
+        return "fail", "ran, no summary marker", _last_run_when(path), (0, 0, 0)
+    if "FAILED" in marker:
+        return "fail", marker.strip("= ")[:80], _last_run_when(path), (0, 0, 0)
+    m = re.search(r"OK: (\d+)/(\d+) apps, (\d+) synced, (\d+) pruned", marker)
+    apps, total, synced, pruned = (int(m.group(1)), int(m.group(2)),
+                                   int(m.group(3)), int(m.group(4))) if m else (0, 0, 0, 0)
+    detail = f"{apps}/{total} apps · {synced} synced · {pruned} pruned"
+    return "ok", detail, _last_run_when(path), (apps, synced, pruned)
 
 
 def parse_prep(path):

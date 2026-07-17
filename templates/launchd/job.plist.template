@@ -16,6 +16,10 @@
     meeting-reports   22     0      meeting-notes pipeline (if selected)
   meeting-prep uses StartInterval 900 (every 15 min) INSTEAD of
   StartCalendarInterval — swap the block per the comment below.
+  meeting-reports runs the AGENT, not a python script — its ProgramArguments are
+  /bin/bash + ~/.hermes/scripts/run_with_marker.sh + "meeting-reports" + the
+  hermes command (templates/skills/README.md step 5). The marker line the wrapper
+  appends is what the ops digest grades; without it the row reports FAIL.
 
   The gateway is NOT installed from this template — use the platform's own
   service installer (it needs KeepAlive), e.g. `hermes gateway install`.

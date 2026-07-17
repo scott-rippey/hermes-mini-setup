@@ -20,6 +20,7 @@ import base64
 import json
 import subprocess
 import sys
+import time
 import urllib.request
 import urllib.error
 
@@ -84,7 +85,7 @@ def sync_app(app: dict) -> dict:
         )
         existing = {row[0]: row[1] for row in cur.fetchall()}
 
-    synced = skipped = pruned = 0
+    synced = skipped = pruned = store_errors = 0
     current_titles = set()
     for f in files:
         path, sha = f["path"], f["sha"]
@@ -102,6 +103,7 @@ def sync_app(app: dict) -> dict:
         res = server._store(content, title, app=app["slug"],
                             metadata={"source": "github", "repo": repo, "branch": branch, "path": path, "sha": sha})
         if res.get("error"):
+            store_errors += 1
             print(f"[{app['slug']}] ERROR storing {path}: {res['error']}")
         else:
             synced += 1
@@ -117,7 +119,8 @@ def sync_app(app: dict) -> dict:
                 print(f"[{app['slug']}] pruned {title}")
 
     print(f"[{app['slug']}] done — {synced} synced, {skipped} unchanged, {pruned} pruned ({repo}@{branch})")
-    return {"app": app["slug"], "synced": synced, "skipped": skipped, "pruned": pruned}
+    return {"app": app["slug"], "synced": synced, "skipped": skipped, "pruned": pruned,
+            "store_errors": store_errors}
 
 
 def main():
@@ -129,14 +132,33 @@ def main():
         apps = [a for a in apps if a["slug"] in wanted]
     if not apps:
         print("no apps with a repo to sync")
+        print(f"=== docs-sync {time.strftime('%Y%m%d-%H%M%S')} OK: 0/0 apps, 0 synced, 0 pruned ===")
         return
+    # The end-of-run marker is the ONLY line the ops digest grades — every
+    # per-app outcome must land in `failures` or the digest can't see it.
+    results, failures = [], []
     for app in apps:
         try:
-            sync_app(app)
+            r = sync_app(app)
+            if r.get("error"):
+                failures.append(f"{app['slug']}: {r['error']}")
+            elif r.get("store_errors"):
+                failures.append(f"{app['slug']}: {r['store_errors']} store errors")
+            else:
+                results.append(r)
         except urllib.error.HTTPError as e:
             print(f"[{app['slug']}] HTTP {e.code} on {repr(getattr(e, 'url', '?'))}: {e.reason}")
+            failures.append(f"{app['slug']}: HTTP {e.code}")
         except Exception as e:
             print(f"[{app['slug']}] ERROR: {type(e).__name__}: {e}")
+            failures.append(f"{app['slug']}: {type(e).__name__}")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    if failures:
+        print(f"=== docs-sync {stamp} FAILED: {len(results)}/{len(apps)} apps ({'; '.join(failures)}) ===")
+    else:
+        synced = sum(r["synced"] for r in results)
+        pruned = sum(r["pruned"] for r in results)
+        print(f"=== docs-sync {stamp} OK: {len(results)}/{len(apps)} apps, {synced} synced, {pruned} pruned ===")
 
 
 if __name__ == "__main__":
