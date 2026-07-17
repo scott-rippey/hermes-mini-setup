@@ -6,6 +6,7 @@ The installer (root `CLAUDE.md`) references these per phase; the operator keeps 
 |---|---|---|
 | [architecture.md](architecture.md) | The one-page system truth: stack, jobs, repos, posture | all |
 | [security.md](security.md) | No-ingress table, outbound gates, injection rules, secrets, supply chain, incident log | all |
+| [web-research.md](web-research.md) | Firecrawl backend (primary) vs the scrapling skill (fallback): which scrapes what | 3, 7 |
 | [knowledge-base.md](knowledge-base.md) | The KB: identity model, scoping discipline, write gates | 4 |
 | [slack-gateway.md](slack-gateway.md) | The Slack app, Socket Mode, personas, gateway ops | 5 |
 | [google-workspace.md](google-workspace.md) | The two-account model: operator reads, agent acts | 6 |

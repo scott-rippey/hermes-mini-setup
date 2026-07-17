@@ -21,7 +21,7 @@ Enable/disable = the **`skills.disabled` list in `config.yaml`** + a gateway res
 | meeting-reports | your build (optional) | The nightly meeting pipeline |
 | google-workspace | bundled **(modified — this repo ships the mods)** | All Google I/O |
 | telephony | official **(modified — see telephony-mods/)** | Outbound calls (optional) |
-| scrapling | official | Hard-page research fallback |
+| scrapling | official | Hard-page fallback to the built-in web tools (whose Firecrawl backend is wired in Phase 3 — see [web-research.md](web-research.md)) |
 | maps | bundled | OSM geocode/route — keyless; powers the travel fallback + live "route me from anywhere" asks |
 
 ## The patch ledger (keep one; this is yours pre-filled)
