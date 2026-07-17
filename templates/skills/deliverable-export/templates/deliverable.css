@@ -23,8 +23,14 @@ strong { color: #0b3d5c; }
 ul, ol { margin: 6px 0 12px 2px; padding-left: 20px; }
 li { margin: 3px 0; }
 code { background: #eef2f5; padding: 1px 5px; border-radius: 3px; font-size: 9.5pt; }
-pre { background: #f5f7f9; padding: 11px 13px; border-radius: 5px; border-left: 3px solid #1f8fb0; font-size: 9.5pt; }
+pre { background: #f5f7f9; padding: 11px 13px; border-radius: 5px; border-left: 3px solid #1f8fb0; font-size: 9.5pt; white-space: pre-wrap; overflow-wrap: break-word; }
 pre code { background: none; padding: 0; }
+/* Pandoc injects highlighting CSS that forces no-wrap: pre > code.sourceCode { white-space: pre }
+   plus per-line inline-block spans, whose shrink-to-fit width ignores overflow-wrap in weasyprint —
+   so long lines overflow the page. Match its selectors (same specificity, this file loads later) and
+   flatten the spans to inline: the literal newlines between them keep the line structure under pre-wrap. */
+pre > code.sourceCode { white-space: pre-wrap; overflow-wrap: anywhere; }
+pre > code.sourceCode > span { display: inline; white-space: pre-wrap; overflow-wrap: anywhere; text-indent: 0; padding-left: 0; }
 blockquote { border-left: 3px solid #cdd7de; color: #555f66; margin: 12px 0; padding: 2px 0 2px 14px; }
 table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 10pt; }
 th { background: #0b3d5c; color: #fff; text-align: left; padding: 7px 10px; }
