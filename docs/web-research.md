@@ -29,7 +29,8 @@ configured as a *web backend*, not a skill — that's why an install can look li
    the agent reaches for the **scrapling** skill, which has three fetch
    strategies (plain HTTP, real-browser JS, stealth/Cloudflare-bypass) plus a
    spider for crawling multiple pages. Its own SKILL.md tells the agent it's the
-   fallback for exactly this case.
+   fallback for exactly this case. (Phase 7 pre-arms it — package, browsers,
+   PATH symlink, smoke test — so the fallback fires instantly when needed.)
 
 ## Setup this install needs (the step the phases don't cover)
 
