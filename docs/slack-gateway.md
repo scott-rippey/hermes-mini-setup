@@ -19,6 +19,8 @@ Three free-response channels (no @mention needed), persona text instantiated fro
 | `#research` | Gather → synthesize → present-then-file; KB-first; explicit scope on every store |
 | `#proposals` | Consultative playbook drafter; pulls KB context; extracts missing inputs; **drafts, never sends** |
 
+All three are **free-response channels** (`slack.free_response_channels` = their IDs): the agent replies to every message without needing an @-mention. The platform default is mention-gated — an install that skips this key looks alive but only answers when summoned.
+
 ## Media in — and what does NOT happen
 
 - **Voice notes** auto-transcribe at the gateway (local `faster-whisper`, on-box, free) and inject as text. Model: `small` (`stt.local.model` — deliberately above the `base` default for accuracy).
