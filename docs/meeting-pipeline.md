@@ -30,6 +30,7 @@ When the invite's `location` is a **physical address** (URLs/Zoom/Meet/Teams ⇒
 
 - **Primary: Google Routes API, `TRAFFIC_AWARE`, two-pass** — pass 1 estimates the drive, pass 2 recomputes at the actual departure time (predictive traffic for when you'll really be on the road). ≤2 calls per prepped meeting; ~10 addressed meetings/month sits far inside the 5,000 free traffic-aware calls/month. Key: Routes-restricted, in `.env`. (The reference build shipped a keyless typical-time version first and switched the same day — for a "leave by" number, traffic-awareness is the point. Ship Google-primary.)
 - **Fallback: OpenStreetMap/OSRM via the maps skill** (keyless) — any Google failure degrades to a typical-time estimate with an honest label switch ("Live + predicted traffic (Google Routes)" vs. "Typical drive time (OpenStreetMap) — no live traffic data").
+- **Solo appointments still get travel (2026-07-17):** an event with a physical address but no other attendees skips the full prep (no one to research) and instead sends a compact deterministic reminder — title, time, place, **leave by** — same travel engine, no synthesis. No address and no attendees → silence, as before.
 - **Override = no code:** plans changed, different origin → ask the agent live in Slack; the maps skill routes from anywhere on demand.
 - ⚠️ The OSM path must run on the **venv python** — Apple's `/usr/bin/python3` fails TLS to OSM hosts.
 

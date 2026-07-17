@@ -355,6 +355,30 @@ def build_html(event, cps, kbs, prep_html, travel=None):
     )
 
 
+def build_solo_html(event, travel):
+    """Solo appointment (no counterparts) that carries a real address: a compact,
+    fully deterministic reminder — the leave-by IS the content, nothing to synthesize."""
+    when = fmt_time(event.get("start"))
+    loc = event.get("location") or ""
+    src_label = ("Live + predicted traffic (Google Routes)."
+                 if travel.get("source") == "google-traffic"
+                 else "Typical drive time (OpenStreetMap) — no live traffic data.")
+    return (
+        f'<div style="max-width:600px;margin:0 auto;padding:4px 2px;font:{FONT}">'
+        f'<div style="font:800 20px {FONT};color:{INK};margin:0 0 1px">🚗 Appointment reminder</div>'
+        f'<div style="font:14px {FONT};color:{INK};margin:6px 0 2px"><b>{esc(event.get("summary") or "(untitled)")}</b></div>'
+        f'<div style="font:13px {FONT};color:{FAINT};margin-bottom:14px">{esc(when)} &middot; {esc(loc)}</div>'
+        f'<div style="background:#ecfdf5;border-left:4px solid #059669;border-radius:0 10px 10px 0;'
+        f'padding:12px 16px;font:14px/1.5 {FONT};color:{INK}">'
+        f'🚗 <b>Leave by {travel["leave_by"].strftime("%-I:%M %p")}</b> — '
+        f'~{travel["minutes"]} min drive ({travel["miles"]} mi) from home '
+        f'+ {TRAVEL_CUSHION_MIN}-min buffer'
+        f'<div style="color:{MUTED};font-size:12px;margin-top:2px">{src_label}</div></div>'
+        f'<div style="color:{FAINT};font:11px {FONT};margin-top:22px;border-top:1px solid {LINE};padding-top:10px">{{AGENT_NAME}} &middot; solo appointment with an address &middot; ~2h before</div>'
+        f'</div>'
+    )
+
+
 # ----------------------------------------------------------------------------- main
 
 def load_ledger():
@@ -390,7 +414,36 @@ def main(dry_run=False, window_min=PREP_WINDOW_MIN):
         if my_status(ev) == "declined":
             continue
         cps = counterparts(ev)
-        if not cps:                                 # no real counterpart -> nothing to prep
+        if not cps:
+            # Solo appointment: still worth a reminder IF it carries a real address
+            # (reference build, 2026-07-17) — deterministic leave-by only, no synthesis.
+            # Ledger check FIRST: travel_info costs Routes calls and this polls every 15m.
+            if eid in ledger and not dry_run:
+                continue
+            travel = travel_info(ev)                # None unless location is a physical address
+            if not travel:                          # solo + no address -> nothing to prep
+                continue
+            body = build_solo_html(ev, travel)
+            subject = (f"🚗 Leave by {travel['leave_by'].strftime('%-I:%M %p')}: "
+                       f"{ev.get('summary') or 'appointment'} at {fmt_time(start)}")
+            if dry_run:
+                out = LOGS / "meeting-prep-preview.html"
+                out.write_text(body)
+                log(f"[dry-run] SOLO {ev.get('summary')} @ {fmt_time(start)} "
+                    f"| leave by {travel['leave_by'].strftime('%-I:%M %p')} -> preview {out}")
+                prepped += 1
+                continue
+            send = subprocess.run(
+                [PY, GAPI, "gmail", "send", "--to", OPERATOR, "--subject", subject, "--body", body, "--html"],
+                capture_output=True, text=True, timeout=120,
+            )
+            if send.returncode == 0:
+                ledger[eid] = now.isoformat()
+                prepped += 1
+                log(f"sent solo reminder: {ev.get('summary')} @ {fmt_time(start)} "
+                    f"(leave by {travel['leave_by'].strftime('%-I:%M %p')})")
+            else:
+                log(f"SEND FAILED for {ev.get('summary')}: {send.stderr[-200:]}")
             continue
         if eid in ledger and not dry_run:
             continue
