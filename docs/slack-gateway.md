@@ -21,7 +21,7 @@ Three free-response channels (no @mention needed), persona text instantiated fro
 
 ## Media in — and what does NOT happen
 
-- **Voice notes** auto-transcribe at the gateway (local `faster-whisper`, on-box, free) and inject as text.
+- **Voice notes** auto-transcribe at the gateway (local `faster-whisper`, on-box, free) and inject as text. Model: `small` (`stt.local.model` — deliberately above the `base` default for accuracy).
 - **File uploads** (PDF/DOCX/CSV/images) are read into the conversation as *context*. They are **never auto-filed to the KB** — filing is the `file-to-kb` skill, behind the offer-then-file gate.
 
 ## The gateway process

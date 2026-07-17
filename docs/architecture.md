@@ -37,7 +37,7 @@ phone (outbound-only, provider cloud)                 main model (flat-rate OAut
 
 - **Chat (all personas):** GPT-5.5 via the **Codex OAuth** on a flat-rate ChatGPT Pro plan — token counts are the signal, dollars are not. Headless runs (`hermes -z`) ride the same path: brief synthesis, call reports, change narratives.
 - **Aux:** a small model for web extraction. **Embeddings:** OpenAI `text-embedding-3-large` on a separate, metered API key that exists *only* for embeddings (pennies/month).
-- **STT:** local `faster-whisper` — Slack voice notes transcribe on-box, free.
+- **STT:** local `faster-whisper` (model `small`) — Slack voice notes transcribe on-box, free.
 
 ## Interfaces
 

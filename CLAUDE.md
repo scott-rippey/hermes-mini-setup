@@ -48,7 +48,7 @@ You do: `createdb`, apply `sql/schema.sql` **verbatim**, apply generated seeds, 
 
 ## Phase 5 — Slack (the daily driver)
 
-User does: create the Slack app **from the manifest you generate** (`hermes slack manifest`), enable Socket Mode, install to workspace, create the persona channels, and copy two tokens when you say so. You do: `.env` wiring (via Terminal ceremony), **allowlist their member ID before first message**, channel→persona prompts from Phase 0, gateway as a login service, inline replies. **Gate:** they message each channel and get in-persona replies; voice note transcribes.
+User does: create the Slack app **from the manifest you generate** (`hermes slack manifest`), enable Socket Mode, install to workspace, create the persona channels, and copy two tokens when you say so. You do: `.env` wiring (via Terminal ceremony), **allowlist their member ID before first message**, channel→persona prompts from Phase 0, gateway as a login service, inline replies, and set `stt.local.model: small` in config.yaml (voice transcription — the reference build runs whisper `small` over the platform-default `base` for accuracy; still seconds per note on Apple silicon). **Gate:** they message each channel and get in-persona replies; voice note transcribes.
 
 ## Phase 6 — Google (two-account model)
 
