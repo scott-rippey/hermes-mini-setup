@@ -137,11 +137,15 @@ def kb_context(cp):
     companies = pg("SELECT c.name, coalesce(cp.role,'') FROM customer_people cp "
                    "JOIN customers c ON c.id=cp.customer_id WHERE cp.person_id=:'pid' "
                    "ORDER BY cp.is_primary DESC", pid=pid)
-    meetings = pg("SELECT title, coalesce(to_char(meeting_date,'YYYY-MM-DD'),''), coalesce(meeting_type,'') "
-                  "FROM meetings WHERE person_id=:'pid' ORDER BY meeting_date DESC NULLS LAST LIMIT 4", pid=pid)
-    docs = pg("SELECT path, left(content, 500) FROM memory_documents "
-              "WHERE person_id=:'pid' OR customer_id IN (SELECT customer_id FROM customer_people WHERE person_id=:'pid') "
-              "ORDER BY updated_at DESC LIMIT 5", pid=pid)
+    meetings = pg("SELECT m.title, coalesce(to_char(m.meeting_date,'YYYY-MM-DD'),''), coalesce(m.meeting_type,'') "
+                  "FROM meetings m WHERE m.person_id=:'pid' "
+                  "OR EXISTS (SELECT 1 FROM document_people dp WHERE dp.document_id=m.document_id AND dp.person_id=:'pid') "
+                  "ORDER BY m.meeting_date DESC NULLS LAST LIMIT 4", pid=pid)
+    docs = pg("SELECT path, left(content, 500) FROM memory_documents d "
+              "WHERE d.id IN (SELECT document_id FROM document_people WHERE person_id=:'pid') "
+              "OR d.id IN (SELECT document_id FROM document_customers WHERE customer_id IN "
+              "(SELECT customer_id FROM customer_people WHERE person_id=:'pid')) "
+              "ORDER BY d.updated_at DESC LIMIT 5", pid=pid)
     return {"found": True, "name": pname, "email": cp["email"],
             "companies": companies, "meetings": meetings, "docs": docs}
 
