@@ -14,7 +14,7 @@
 - **`people`** — first-class contacts, linked to companies **many-to-many** with a per-company role. One person can span businesses — e.g., Jamie is "Owner" at Acme Gym *and* "Partner" at Acme Parking; `add_person` finds-or-links, never duplicates.
 - **`apps`** — first-class software records, each owned by exactly ONE company, optionally carrying a GitHub `owner/name` (feeds the docs-sync).
 - **`meetings`** — one row per real meeting (unique meeting-id dedupe), linked to customer/person and the searchable meeting doc.
-- A document files under a company, optionally also a person and/or an app.
+- A document files under a **primary** company, optionally also a person and/or an app — and can **link to any number of additional people and companies** via the `document_people` / `document_customers` join tables (`people=` / `customers=` on `store` / `add_meeting`). Search scoped to a person or company matches any linked doc, so a multi-attendee meeting note surfaces under every attendee. Extras must already exist (no silent creates); a linked person at exactly one company links that company automatically. Installs created before this schema shipped: apply `sql/migrations/005_document_links_m2m.sql` (adds the join tables + backfills from the single columns), then update the mcp-rag server from the template.
 
 ## Scoping rules (learned from a real misfile)
 

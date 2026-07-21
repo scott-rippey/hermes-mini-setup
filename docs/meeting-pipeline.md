@@ -12,7 +12,7 @@ A skill run headlessly each night:
 
 1. Pull recent meetings; dedupe via a local `processed.json`.
 2. Author each report; render **Markdown + email-safe HTML** (inline delivery beats attachments).
-3. **Resolve who it was:** counterpart name → person → company (a multi-company person resolves to their primary). Unmatched name → a Slack prompt asking the operator to assign it — never guess.
+3. **Resolve who it was:** counterpart name → person → company (a multi-company person resolves to their primary). Unmatched name → a Slack prompt asking the operator to assign it — never guess. Other actual **participants** (a "w/ A & B" title, named attendees) that resolve to existing person cards pass as `people=` so the note links to — and is searchable under — every attendee; participants only, never merely-mentioned names, and unresolved extras don't escalate.
 4. **File it** via `add_meeting` — a sanctioned deterministic write: the structured `meetings` row (unique meeting-id dedupe, FKs to customer/person) + the searchable KB doc.
 5. Queue the rendered HTML for the next morning's brief.
 

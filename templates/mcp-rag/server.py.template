@@ -19,9 +19,13 @@ People are first-class rows linked to companies through the `customer_people` jo
 table (a person can belong to MANY companies, with a per-company role) — contacts are
 NOT stored as alias strings on the company. Apps are first-class rows in `apps`, each
 owned by exactly ONE company (customer_id), with an optional GitHub `repo` its docs
-sync from. A document is attached to ONE company (customer_id) and optionally ONE
-person (person_id) and/or ONE app (app_id); filing under an app derives its company,
-and filing under a multi-company person needs the company named.
+sync from. A document has ONE primary filing (customer_id, optional person_id and/or
+app_id — filing under an app derives its company, and filing under a multi-company
+person needs the company named) but can LINK to any number of additional people and
+companies through the `document_people` / `document_customers` join tables (`people=` /
+`customers=` on store/add_meeting) — a meeting note with several attendees is findable
+under every one of them. Search scopes match any linked person/company, not just the
+primary.
 
 Writes into the local `{{KB_DB_NAME}}` Postgres (pgvector), scoped to a dedicated
 namespace (RAG_NAMESPACE -> memory_documents.user_id). Embed-on-store: embeddings are generated here via the OpenAI
@@ -180,14 +184,15 @@ def _resolve_app(name, cur):
             "customer_id": row[3], "customer_slug": row[4], "customer_name": row[5]}
 
 
-def _store(content, title, customer=None, person=None, app=None, metadata=None) -> dict:
+def _store(content, title, customer=None, person=None, app=None, metadata=None,
+           people=None, customers=None) -> dict:
     content = (content or "").strip()
     if not content:
         return {"error": "empty content"}
     title = (title or "untitled").strip()
     chunks = _chunk(content)
     embs = _embed(chunks)
-    with _connect(autocommit=False) as conn, conn.cursor() as cur:  # atomic: customer + doc + chunks
+    with _connect(autocommit=False) as conn, conn.cursor() as cur:  # atomic: customer + doc + chunks + links
         app_row = None
         person_row = None
         cust = None
@@ -218,6 +223,28 @@ def _store(content, title, customer=None, person=None, app=None, metadata=None) 
         cust_id = cust["id"] if cust else None
         person_id = person_row["id"] if person_row else None
         app_id = app_row["id"] if app_row else None
+        # additional links (m2m): every extra person/customer must already exist — no silent creates
+        link_people = {}
+        if person_row:
+            link_people[person_row["id"]] = person_row
+        for nm in (people or []):
+            pr = _resolve_person(nm, cur)
+            if not pr:
+                return {"error": f"person '{nm}' not found — add them with add_person first"}
+            link_people.setdefault(pr["id"], pr)
+        link_customers = {}
+        if cust:
+            link_customers[cust["id"]] = cust
+        for nm in (customers or []):
+            cr = _resolve_customer(nm, cur)
+            if not cr:
+                return {"error": f"customer '{nm}' not found — onboard them first with add_customer"}
+            link_customers.setdefault(cr["id"], cr)
+        # a linked person at exactly ONE company links that company too; multi-company stays person-only
+        for pr in link_people.values():
+            comps = pr.get("companies") or []
+            if len(comps) == 1:
+                link_customers.setdefault(comps[0]["id"], comps[0])
         cur.execute(
             """
             INSERT INTO memory_documents (id, user_id, agent_id, path, content, metadata, customer_id, person_id, app_id, created_at, updated_at)
@@ -240,14 +267,24 @@ def _store(content, title, customer=None, person=None, app=None, metadata=None) 
                 """,
                 (uuid.uuid4(), doc_id, i, chunk, _vec(emb)),
             )
+        # replace the doc's full link set (primary + extras), mirroring the chunks delete+reinsert
+        cur.execute("DELETE FROM document_people WHERE document_id = %s", (doc_id,))
+        cur.execute("DELETE FROM document_customers WHERE document_id = %s", (doc_id,))
+        for pid in link_people:
+            cur.execute("INSERT INTO document_people (document_id, person_id) VALUES (%s, %s)", (doc_id, pid))
+        for cid in link_customers:
+            cur.execute("INSERT INTO document_customers (document_id, customer_id) VALUES (%s, %s)", (doc_id, cid))
     return {"document_id": str(doc_id), "title": title,
             "customer": cust["slug"] if cust else None,
             "person": person_row["slug"] if person_row else None,
-            "app": app_row["slug"] if app_row else None, "chunks": len(chunks)}
+            "app": app_row["slug"] if app_row else None, "chunks": len(chunks),
+            "customers": sorted(c["slug"] for c in link_customers.values()),
+            "people": sorted(p["slug"] for p in link_people.values())}
 
 
 def _add_meeting(content, title, meeting_id=None, meeting_date=None, meeting_type=None,
-                 counterpart=None, customer=None, person=None, pdf_path=None, metadata=None) -> dict:
+                 counterpart=None, customer=None, person=None, pdf_path=None, metadata=None,
+                 people=None, customers=None) -> dict:
     """File a meeting: store the searchable KB doc (via _store) + upsert the structured meetings row."""
     md = dict(metadata or {})
     md["type"] = "meeting"
@@ -268,7 +305,8 @@ def _add_meeting(content, title, meeting_id=None, meeting_date=None, meeting_typ
             _pr = _resolve_person(who, _c)
         if _pr and len(_pr.get("companies") or []) > 1:
             customer = _pr["companies"][0]["slug"]
-    res = _store(content, title, customer=customer, person=who, metadata=md)
+    res = _store(content, title, customer=customer, person=who, metadata=md,
+                 people=people, customers=customers)
     if "error" in res:
         return res
     doc_id = res["document_id"]
@@ -296,7 +334,8 @@ def _add_meeting(content, title, meeting_id=None, meeting_date=None, meeting_typ
         )
         mid = cur.fetchone()[0]
     return {"meeting_row_id": str(mid), "meeting_id": meeting_id, "document_id": doc_id,
-            "customer": res.get("customer"), "person": res.get("person"), "title": title}
+            "customer": res.get("customer"), "person": res.get("person"), "title": title,
+            "customers": res.get("customers"), "people": res.get("people")}
 
 
 def _search(query, customer=None, person=None, app=None, limit: int = 5) -> list[dict]:
@@ -314,12 +353,18 @@ def _search(query, customer=None, person=None, app=None, limit: int = 5) -> list
                    1 - (c.embedding <=> %s::vector) AS similarity,
                    (SELECT slug FROM customers cu WHERE cu.id = d.customer_id) AS customer,
                    (SELECT slug FROM people pp WHERE pp.id = d.person_id) AS person,
-                   (SELECT slug FROM apps ap WHERE ap.id = d.app_id) AS app
+                   (SELECT slug FROM apps ap WHERE ap.id = d.app_id) AS app,
+                   (SELECT array_agg(cu.slug ORDER BY cu.slug) FROM document_customers dc
+                    JOIN customers cu ON cu.id = dc.customer_id WHERE dc.document_id = d.id) AS customers,
+                   (SELECT array_agg(pp.slug ORDER BY pp.slug) FROM document_people dp
+                    JOIN people pp ON pp.id = dp.person_id WHERE dp.document_id = d.id) AS people
             FROM memory_chunks c
             JOIN memory_documents d ON d.id = c.document_id
             WHERE d.user_id = %s AND d.agent_id = %s
-              AND (%s::uuid IS NULL OR d.customer_id = %s::uuid)
-              AND (%s::uuid IS NULL OR d.person_id = %s::uuid)
+              AND (%s::uuid IS NULL OR EXISTS (SELECT 1 FROM document_customers dc
+                     WHERE dc.document_id = d.id AND dc.customer_id = %s::uuid))
+              AND (%s::uuid IS NULL OR EXISTS (SELECT 1 FROM document_people dp
+                     WHERE dp.document_id = d.id AND dp.person_id = %s::uuid))
               AND (%s::uuid IS NULL OR d.app_id = %s::uuid)
             ORDER BY c.embedding <=> %s::vector
             LIMIT %s
@@ -329,7 +374,8 @@ def _search(query, customer=None, person=None, app=None, limit: int = 5) -> list
         rows = cur.fetchall()
     return [
         {"title": r[1], "document_id": str(r[2]), "similarity": round(float(r[3]), 4),
-         "customer": r[4], "person": r[5], "app": r[6], "content": r[0]}
+         "customer": r[4], "person": r[5], "app": r[6],
+         "customers": list(r[7] or []), "people": list(r[8] or []), "content": r[0]}
         for r in rows
     ]
 
@@ -341,7 +387,11 @@ def _get(document_id: str) -> dict:
             SELECT d.path, d.content, d.metadata,
                    (SELECT slug FROM customers cu WHERE cu.id = d.customer_id) AS customer,
                    (SELECT slug FROM people pp WHERE pp.id = d.person_id) AS person,
-                   (SELECT slug FROM apps ap WHERE ap.id = d.app_id) AS app
+                   (SELECT slug FROM apps ap WHERE ap.id = d.app_id) AS app,
+                   (SELECT array_agg(cu.slug ORDER BY cu.slug) FROM document_customers dc
+                    JOIN customers cu ON cu.id = dc.customer_id WHERE dc.document_id = d.id) AS customers,
+                   (SELECT array_agg(pp.slug ORDER BY pp.slug) FROM document_people dp
+                    JOIN people pp ON pp.id = dp.person_id WHERE dp.document_id = d.id) AS people
             FROM memory_documents d WHERE d.id = %s::uuid AND d.user_id = %s
             """,
             (document_id, NAMESPACE),
@@ -349,24 +399,25 @@ def _get(document_id: str) -> dict:
         row = cur.fetchone()
     if not row:
         return {"error": f"document {document_id} not found"}
-    return {"title": row[0], "content": row[1], "metadata": row[2], "customer": row[3], "person": row[4], "app": row[5]}
+    return {"title": row[0], "content": row[1], "metadata": row[2], "customer": row[3], "person": row[4],
+            "app": row[5], "customers": list(row[6] or []), "people": list(row[7] or [])}
 
 
 @mcp.tool()
-def store(content: str, title: str, customer: str | None = None, person: str | None = None, app: str | None = None, metadata: dict | None = None) -> dict:
-    """Save to the user's KNOWLEDGE BASE ("KB" / "knowledge base") — the local Postgres vector store. ALWAYS use this (NOT built-in memory) whenever the user mentions the knowledge base or KB, or asks to store/save a document, customer info, proposal, research, notes, or an uploaded file. `customer` attaches the document to a customer/identity (name, slug, or alias — resolved to the canonical record, created if genuinely new; defaults to the user's own identity). `person` files the document under a specific contact (name, slug, email, or alias); if that person belongs to one company it attaches there automatically, and if they belong to several you must also pass `customer` to say which. Use it for notes or meetings tied to a person (add them first with add_person). `app` files the document under a specific app / product / project (name, slug, or its GitHub `owner/repo`) and, through the app, under its business — use it for an app's documentation, specs, or notes (register the app first with add_app). `title` is the unique key — re-storing the same title replaces that document."""
-    return _store(content, title, customer, person, app, metadata)
+def store(content: str, title: str, customer: str | None = None, person: str | None = None, app: str | None = None, metadata: dict | None = None, people: list[str] | None = None, customers: list[str] | None = None) -> dict:
+    """Save to the user's KNOWLEDGE BASE ("KB" / "knowledge base") — the local Postgres vector store. ALWAYS use this (NOT built-in memory) whenever the user mentions the knowledge base or KB, or asks to store/save a document, customer info, proposal, research, notes, or an uploaded file. `customer` attaches the document to a customer/identity (name, slug, or alias — resolved to the canonical record, created if genuinely new; defaults to the user's own identity). `person` files the document under a specific contact (name, slug, email, or alias); if that person belongs to one company it attaches there automatically, and if they belong to several you must also pass `customer` to say which. Use it for notes or meetings tied to a person (add them first with add_person). `app` files the document under a specific app / product / project (name, slug, or its GitHub `owner/repo`) and, through the app, under its business — use it for an app's documentation, specs, or notes (register the app first with add_app). A document can also LINK to any number of ADDITIONAL contacts and companies beyond that primary filing: pass `people` (list of names/slugs/emails) and/or `customers` (list of names/slugs/aliases) — e.g. a doc involving two contacts at two companies. Every extra person/customer must already exist (no silent creates); a linked person at exactly one company links that company automatically. The doc is then findable under EVERY linked person/company via search. `title` is the unique key — re-storing the same title replaces that document (links included)."""
+    return _store(content, title, customer, person, app, metadata, people, customers)
 
 
 @mcp.tool()
-def add_meeting(content: str, title: str, meeting_id: str | None = None, meeting_date: str | None = None, meeting_type: str | None = None, counterpart: str | None = None, customer: str | None = None, person: str | None = None, pdf_path: str | None = None, metadata: dict | None = None) -> dict:
-    """File a MEETING into the KB: stores the meeting's markdown as a searchable document AND upserts a structured row in the `meetings` table (linked to the customer, the person/counterpart, and the KB doc). Use this (NOT `store`) for meeting notes/reports. `counterpart` is who the meeting was with (the "w/ Name"); it resolves to a person and through them to the company — pass `customer` to disambiguate when the person belongs to several companies. `meeting_id` is the external id (e.g. Granola) and the dedupe key — re-filing the same meeting_id updates the row. `meeting_date` is YYYY-MM-DD. `pdf_path` is the rendered PDF's path. Returns the meeting row id, document id, and resolved customer/person."""
-    return _add_meeting(content, title, meeting_id=meeting_id, meeting_date=meeting_date, meeting_type=meeting_type, counterpart=counterpart, customer=customer, person=person, pdf_path=pdf_path, metadata=metadata)
+def add_meeting(content: str, title: str, meeting_id: str | None = None, meeting_date: str | None = None, meeting_type: str | None = None, counterpart: str | None = None, customer: str | None = None, person: str | None = None, pdf_path: str | None = None, metadata: dict | None = None, people: list[str] | None = None, customers: list[str] | None = None) -> dict:
+    """File a MEETING into the KB: stores the meeting's markdown as a searchable document AND upserts a structured row in the `meetings` table (linked to the customer, the person/counterpart, and the KB doc). Use this (NOT `store`) for meeting notes/reports. `counterpart` is who the meeting was with (the "w/ Name"); it resolves to a person and through them to the company — pass `customer` to disambiguate when the person belongs to several companies. A meeting with MULTIPLE participants: pass the other known attendees as `people` (list) and any additional involved companies as `customers` (list) — the note then links to and is findable under every one of them, while `counterpart` stays the primary. Only pass actual participants (title/attendees), not people merely mentioned; each must already exist in the KB. `meeting_id` is the external id (e.g. Granola) and the dedupe key — re-filing the same meeting_id updates the row. `meeting_date` is YYYY-MM-DD. `pdf_path` is the rendered PDF's path. Returns the meeting row id, document id, resolved primary customer/person, and the full linked customers/people."""
+    return _add_meeting(content, title, meeting_id=meeting_id, meeting_date=meeting_date, meeting_type=meeting_type, counterpart=counterpart, customer=customer, person=person, pdf_path=pdf_path, metadata=metadata, people=people, customers=customers)
 
 
 @mcp.tool()
 def search(query: str, customer: str | None = None, person: str | None = None, app: str | None = None, limit: int = 5) -> list[dict]:
-    """Search the user's KNOWLEDGE BASE ("KB" / "knowledge base") — semantic search over stored documents. ALWAYS use this (NOT built-in memory) whenever the user asks to search/find/look up/recall something in the knowledge base or KB, or about a customer, proposal, app, or research. Pass `customer` (name/slug/alias) to scope to one customer, `person` (name/slug/email/alias) to scope to one contact's documents, or `app` (name/slug/repo) to scope to one app's documentation; omit all to search across everything. Returns the most relevant chunks with document_id, title, customer, person, app, and similarity. To read a whole document, call `get`."""
+    """Search the user's KNOWLEDGE BASE ("KB" / "knowledge base") — semantic search over stored documents. ALWAYS use this (NOT built-in memory) whenever the user asks to search/find/look up/recall something in the knowledge base or KB, or about a customer, proposal, app, or research. Pass `customer` (name/slug/alias) to scope to one customer, `person` (name/slug/email/alias) to scope to one contact's documents, or `app` (name/slug/repo) to scope to one app's documentation; omit all to search across everything. A customer/person scope matches any document LINKED to them (documents can link to several people and companies — e.g. a multi-attendee meeting note), not just their primary filing. Returns the most relevant chunks with document_id, title, the primary customer/person/app, the full linked `customers`/`people` lists, and similarity. To read a whole document, call `get`."""
     return _search(query, customer, person, app, limit)
 
 
@@ -383,7 +434,7 @@ def customers() -> list[dict]:
         cur.execute(
             """
             SELECT c.slug, c.name, c.aliases,
-                   (SELECT count(*) FROM memory_documents d WHERE d.customer_id = c.id) AS docs
+                   (SELECT count(*) FROM document_customers dc WHERE dc.customer_id = c.id) AS docs
             FROM customers c ORDER BY c.name
             """
         )
@@ -415,7 +466,7 @@ def people(customer: str | None = None) -> list[dict]:
         cur.execute(
             """
             SELECT p.id, p.slug, p.name, p.email, p.aliases,
-                   (SELECT count(*) FROM memory_documents d WHERE d.person_id = p.id) AS docs
+                   (SELECT count(*) FROM document_people dp WHERE dp.person_id = p.id) AS docs
             FROM people p
             WHERE (%s::uuid IS NULL
                    OR EXISTS (SELECT 1 FROM customer_people cp WHERE cp.person_id = p.id AND cp.customer_id = %s::uuid))

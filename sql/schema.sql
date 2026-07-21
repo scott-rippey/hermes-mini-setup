@@ -126,6 +126,28 @@ CREATE TABLE public.customers (
 
 
 --
+-- Name: document_customers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.document_customers (
+    document_id uuid NOT NULL,
+    customer_id uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: document_people; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.document_people (
+    document_id uuid NOT NULL,
+    person_id uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: meetings; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -237,6 +259,22 @@ ALTER TABLE ONLY public.customers
 
 
 --
+-- Name: document_customers document_customers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.document_customers
+    ADD CONSTRAINT document_customers_pkey PRIMARY KEY (document_id, customer_id);
+
+
+--
+-- Name: document_people document_people_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.document_people
+    ADD CONSTRAINT document_people_pkey PRIMARY KEY (document_id, person_id);
+
+
+--
 -- Name: meetings meetings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -311,6 +349,20 @@ CREATE UNIQUE INDEX idx_apps_repo ON public.apps USING btree (lower(repo)) WHERE
 --
 
 CREATE INDEX idx_customer_people_person ON public.customer_people USING btree (person_id);
+
+
+--
+-- Name: idx_document_customers_customer; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_document_customers_customer ON public.document_customers USING btree (customer_id);
+
+
+--
+-- Name: idx_document_people_person; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_document_people_person ON public.document_people USING btree (person_id);
 
 
 --
@@ -461,6 +513,38 @@ ALTER TABLE ONLY public.customer_people
 
 ALTER TABLE ONLY public.customer_people
     ADD CONSTRAINT customer_people_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.people(id) ON DELETE CASCADE;
+
+
+--
+-- Name: document_customers document_customers_customer_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.document_customers
+    ADD CONSTRAINT document_customers_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES public.customers(id) ON DELETE CASCADE;
+
+
+--
+-- Name: document_customers document_customers_document_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.document_customers
+    ADD CONSTRAINT document_customers_document_id_fkey FOREIGN KEY (document_id) REFERENCES public.memory_documents(id) ON DELETE CASCADE;
+
+
+--
+-- Name: document_people document_people_document_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.document_people
+    ADD CONSTRAINT document_people_document_id_fkey FOREIGN KEY (document_id) REFERENCES public.memory_documents(id) ON DELETE CASCADE;
+
+
+--
+-- Name: document_people document_people_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.document_people
+    ADD CONSTRAINT document_people_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.people(id) ON DELETE CASCADE;
 
 
 --

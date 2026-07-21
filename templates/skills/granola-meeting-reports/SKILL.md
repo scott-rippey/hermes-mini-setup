@@ -46,6 +46,8 @@ File with `mcp_rag add_meeting` — stores the searchable markdown AND upserts t
 - `title` = `<YYYY-MM-DD> - <Granola title>` (re-filing the same `meeting_id` updates the row + doc)
 - `counterpart` = the person from the "w/ Name" title
 - `customer` = optional — `add_meeting` auto-files a multi-company counterpart under their **primary** company; pass only to override
+- `people` = optional — the OTHER actual participants, when there were several (a "w/ A & B" title, named attendees, or distinct transcript speakers) and they resolve to existing person cards. The note then links to (and is searchable under) every one of them; `counterpart` stays the primary. **Participants only** — never the merely-mentioned (front-matter `people_mentioned` does NOT qualify). An extra participant with no person card is simply left out (listed in the report as usual) — no escalation for extras; only the counterpart escalates.
+- `customers` = optional — additional involved companies (rare; must already exist)
 - `meeting_id` = the Granola meeting id (dedupe key); `meeting_date` = `YYYY-MM-DD`; `meeting_type` = a value from the template
 
 Resolve the counterpart against people cards (the resolver matches name / alias / email, companies primary-first):
