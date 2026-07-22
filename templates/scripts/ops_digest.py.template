@@ -180,6 +180,28 @@ def parse_prep(path):
     return "ok", last.split("] ", 1)[-1][:80], when
 
 
+def parse_signwellpoll(path):
+    """Every-15-min SignWell poller: staleness = failure; grade ONLY the end-of-run
+    marker the script prints (aggregates per-doc outcomes incl. API errors)."""
+    lines = _tail(path)
+    if not lines:
+        return "none", "no run yet", None
+    when = _last_run_when(path)
+    if when and (datetime.datetime.now() - when).total_seconds() > 35 * 60:
+        return "fail", f"poller stale — no run since {human_age(when)}", when
+    marker = next((l.strip() for l in reversed(lines)
+                   if re.match(r"=== signwell-poll \d{8}-\d{6} (OK|FAILED)", l.strip())), None)
+    if marker is None:
+        return "fail", "ran, no summary marker", when
+    if "FAILED" in marker:
+        return "fail", marker.strip("= ")[:80], when
+    m = re.search(r"OK: (\d+) checked, (\d+) signed, (\d+) pending", marker)
+    if m and m.group(1) == "0":
+        return "ok", "no signatures outstanding", when
+    return "ok", (f"{m.group(1)} outstanding · {m.group(2)} signed · "
+                  f"{m.group(3)} still pending") if m else "run OK", when
+
+
 def parse_callreports(path):
     """Event-driven (per call), not scheduled — count the last 24h of outcomes."""
     lines = _tail(path, 200)
@@ -269,6 +291,7 @@ def cron_health():
         ("Morning brief", "morning-brief.log", "8:00a", parse_brief),
         ("Meeting prep", "meeting-prep.log", "15m poll", parse_prep),
         ("Call reports", "call-reports.log", "per call", parse_callreports),
+        ("SignWell poll", "signwell-poll.log", "15m poll", parse_signwellpoll),
         ("Ops digest (prev)", "ops-digest.log", "8:10a", parse_opsdigest),
     ]
     # Optional-feature rows: no installed artifact on this box = feature not
@@ -277,6 +300,7 @@ def cron_health():
         "Meeting reports": HOME / ".hermes/skills/productivity/granola-meeting-reports",
         "GitHub docs sync": HOME / ".hermes/mcp-rag/github_docs_sync.py",
         "Call reports": HOME / ".hermes/skills/productivity/telephony",
+        "SignWell poll": HOME / ".hermes/skills/productivity/proposal-esign",
     }
     for label, logf, sched, parser in jobs:
         marker = optional_markers.get(label)

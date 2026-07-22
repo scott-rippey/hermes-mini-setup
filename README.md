@@ -17,6 +17,7 @@ Underneath is the official [Nous Research Hermes Agent](https://github.com/NousR
 ## What you end up with
 
 - **Slack as the daily driver** — persona channels (chief-of-staff / research / proposals), voice notes auto-transcribed, no public endpoints anywhere (outbound Socket Mode only)
+- **Proposals that close** — the #proposals persona discovers before it drafts (KB + your email), and the optional SignWell pipeline sends the rendered proposal for legally-binding e-signature behind a send-card gate, then polls the signature home and files it — still zero ingress
 - **A private knowledge base** (Postgres + pgvector, local) — customers, contacts, apps, meetings, documents; semantic search; every write human-approved. Your own repos' `CLAUDE.md` + `docs/` sync in nightly (deterministic, no AI), so the agent always knows your apps' current state
 - **Web research & scraping** — live web search and page extraction in every persona plus a dedicated research channel, with a stealth-scraping skill for bot-hostile pages; findings are presented to you and filed to the KB only on your say-so
 - **Morning intelligence** — a synthesized daily brief (calendar + email + tasks) and a deterministic ops digest that watches every subsystem, including itself
@@ -35,7 +36,7 @@ Underneath is the official [Nous Research Hermes Agent](https://github.com/NousR
 | Google Workspace | Your own domain, with a second user seat for the agent's identity |
 | Slack | A free workspace is fine |
 | OpenAI API key | Embeddings only (typically well under $5/mo) |
-| Optional | Granola or any MCP meeting-notes provider (meeting pipeline) · Bland.ai (phone calls) · a private GitHub repo (docs self-backup) · Google Routes API (live-traffic ETAs) |
+| Optional | Granola or any MCP meeting-notes provider (meeting pipeline) · Bland.ai (phone calls) · SignWell (proposal e-signature — free at low volume) · a private GitHub repo (docs self-backup) · Google Routes API (live-traffic ETAs) |
 
 Plan a **full day** end-to-end (the reference build took ~1.5 days including tearing out a predecessor system and making every decision fresh — you're inheriting the decisions). The phases pause cleanly, so splitting across evenings works fine.
 

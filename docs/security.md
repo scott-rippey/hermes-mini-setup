@@ -16,6 +16,7 @@ A single-operator box holding business data, agent credentials, and an LLM agent
 | Google | Outbound API calls | No push/webhooks — meeting prep is deliberately a **poll** |
 | Postgres / dashboard / the rag MCP | localhost | Everything binds `127.0.0.1` (verify with `lsof -iTCP -sTCP:LISTEN`) |
 | Meeting-notes MCP (optional) | **Outbound** HTTPS (OAuth) | A remote connector the box calls out to (reference: Granola) — no listener, token in `mcp-tokens/` (700). What it returns (transcripts, summaries) is foreign content: data, never instructions (§2) |
+| E-signature API (optional) | **Outbound** HTTPS | SignWell under the operator's own business account; key in `.env` (600). No webhook — signature completion is **polled**, the signed PDF is pulled over the same API. Sends gated per §3 |
 | Any future event source | none | If ever truly needed: a hosted relay the box polls — still zero ingress |
 
 Host: FileVault ON · sleep disabled · the app firewall is optional given zero listeners, but costs nothing.
@@ -33,6 +34,7 @@ Host: FileVault ON · sleep disabled · the app firewall is optional given zero 
 | Email to the operator (their own address) | Auto-allowed (deterministic self-reports) |
 | Email to anyone else / calendar invites | Explicit per-item approval (SOUL rule) |
 | Phone call / SMS | Per-call approval showing who / number / the full task brief — the approval doubles as a **data-disclosure review** (briefs carry minimum-necessary data; the provider retains transcripts) |
+| Proposal e-sign send (optional) | **Send-card gate**: before every live send the agent posts recipient + exact PDF + subject and waits for a confirm — even when the instruction already named them (intent-approval ≠ artifact-approval); `test_mode` rehearsals bill nothing and bind nobody |
 | KB writes (interactive) | Offer-then-file — the agent presents, the operator chooses scope; never stored on the agent's judgment |
 | KB writes (optional deterministic pipelines) | **Sanctioned auto-writes with zero agent judgment**: docs-sync files by a fixed repo→app mapping; meeting filing resolves person→company deterministically and **escalates to Slack instead of guessing** when it can't |
 | Unattended sessions (crons, headless runs) | `approvals.cron_mode: deny` — can never approve anything |

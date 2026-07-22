@@ -16,4 +16,5 @@ The installer (root `CLAUDE.md`) references these per phase; the operator keeps 
 | [backups-and-dr.md](backups-and-dr.md) | The nightly trilogy, restore drills, the passphrase rule | 9 |
 | [memory-system.md](memory-system.md) | The four memory lanes + the drift incident that teaches them | 0, 9 |
 | [telephony.md](telephony.md) | Outbound calls: approvals, reports, the neutered inbound | 10 |
+| [proposal-esign.md](proposal-esign.md) | E-signature via SignWell: send-card gate, text tags, the collection poller | 10b |
 | [operations.md](operations.md) | The operator's runbook: rhythm, ceremonies, troubleshooting | 11 → forever |

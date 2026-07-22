@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""SignWell e-signature helper for the proposal-esign skill.
+
+Subcommands:
+  send    --pdf FILE --name N --email E [--subject S] [--message M]
+          [--customer SLUG] [--live]        (default = test_mode)
+  status  --id DOC_ID
+  poll [--notify]                           (check all pending; download completed;
+                                             --notify posts the file-ask to Slack —
+                                             cron mode only, interactive polls omit it)
+
+State: ~/.hermes/signwell/pending.json — docs awaiting signature.
+Signed PDFs land in ~/{{AGENT_SLUG}}-outputs/. No email is sent — SignWell already
+emails {{OPERATOR_FIRST_NAME}} the signed copy on completion.
+"""
+import argparse
+import base64
+import json
+import os
+import subprocess
+import sys
+import urllib.request
+import urllib.error
+from datetime import datetime, timezone
+
+API = "https://www.signwell.com/api/v1"
+STATE = os.path.expanduser("~/.hermes/signwell/pending.json")
+OUTDIR = os.path.expanduser("~/{{AGENT_SLUG}}-outputs")
+HERMES = os.path.expanduser("~/.local/bin/hermes")
+
+
+def api_key():
+    with open(os.path.expanduser("~/.hermes/.env")) as f:
+        for line in f:
+            if line.startswith("SIGNWELL_API_KEY="):
+                return line.split("=", 1)[1].strip()
+    sys.exit("SIGNWELL_API_KEY not found in ~/.hermes/.env")
+
+
+def request(method, path, payload=None, raw=False):
+    req = urllib.request.Request(
+        f"{API}{path}",
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={"X-Api-Key": api_key(), "Content-Type": "application/json"},
+        method=method,
+    )
+    with urllib.request.urlopen(req) as r:
+        return r.read() if raw else json.load(r)
+
+
+def load_state():
+    if os.path.exists(STATE):
+        with open(STATE) as f:
+            return json.load(f)
+    return []
+
+
+def save_state(items):
+    with open(STATE, "w") as f:
+        json.dump(items, f, indent=2)
+
+
+def cmd_send(args):
+    with open(args.pdf, "rb") as f:
+        pdf_b64 = base64.b64encode(f.read()).decode()
+    doc_name = os.path.basename(args.pdf).rsplit(".", 1)[0]
+    payload = {
+        "test_mode": not args.live,
+        "name": doc_name,
+        "subject": args.subject,
+        "message": args.message,
+        "text_tags": True,
+        "files": [{"name": os.path.basename(args.pdf), "file_base64": pdf_b64}],
+        "recipients": [{"id": "1", "name": args.name, "email": args.email}],
+    }
+    try:
+        doc = request("POST", "/documents", payload)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"HTTP {e.code}: {e.read().decode()[:2000]}")
+
+    entry = {
+        "id": doc["id"],
+        "doc_name": doc_name,
+        "recipient_name": args.name,
+        "recipient_email": args.email,
+        "customer": args.customer,
+        "test_mode": not args.live,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    }
+    items = load_state()
+    items.append(entry)
+    save_state(items)
+    print(json.dumps({"sent": True, **entry, "status": doc.get("status")}, indent=2))
+
+
+def cmd_status(args):
+    doc = request("GET", f"/documents/{args.id}")
+    print(json.dumps({
+        "id": doc.get("id"), "name": doc.get("name"), "status": doc.get("status"),
+        "test_mode": doc.get("test_mode"),
+        "recipients": [{"name": r.get("name"), "email": r.get("email"),
+                        "status": r.get("status")} for r in doc.get("recipients", [])],
+    }, indent=2))
+
+
+def download_signed(entry):
+    """Fetch the completed PDF; returns saved path or None if not ready yet."""
+    try:
+        pdf = request("GET", f"/documents/{entry['id']}/completed_pdf", raw=True)
+    except urllib.error.HTTPError as e:
+        if e.code == 400:  # final file still generating — retry next poll
+            return None
+        raise
+    os.makedirs(OUTDIR, exist_ok=True)
+    date = datetime.now().strftime("%Y-%m-%d")
+    path = os.path.join(OUTDIR, f"{date}-{entry['doc_name']}-SIGNED.pdf")
+    with open(path, "wb") as f:
+        f.write(pdf)
+    return path
+
+
+def notify_slack(text):
+    """Post to #proposals via the gateway (cron mode only). Returns ok bool."""
+    r = subprocess.run([HERMES, "send", "-t", "slack:#proposals", text],
+                       capture_output=True, text=True)
+    return r.returncode == 0
+
+
+def cmd_poll(args):
+    try:
+        _poll(args)
+    except Exception as e:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        print(f"=== signwell-poll {stamp} FAILED: {type(e).__name__}: {e} ===")
+        raise
+
+
+def _poll(args):
+    items = load_state()
+    still_pending, results = [], []
+    for entry in items:
+        try:
+            doc = request("GET", f"/documents/{entry['id']}")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:  # deleted upstream — drop it
+                results.append({**entry, "result": "gone_upstream"})
+                continue
+            still_pending.append(entry)
+            results.append({**entry, "result": f"api_error_{e.code}"})
+            continue
+        status = doc.get("status")
+        if status == "Completed":
+            path = download_signed(entry)
+            if path is None:
+                still_pending.append(entry)
+                results.append({**entry, "result": "completed_pdf_not_ready"})
+                continue
+            res = {**entry, "result": "signed", "signed_pdf": path}
+            if args.notify:
+                msg = (f":writing_hand: *Signed:* {entry['doc_name']} — "
+                       f"{entry['recipient_name']} <{entry['recipient_email']}> "
+                       f"just completed signing. SignWell emailed {{OPERATOR_FIRST_NAME}} the signed "
+                       f"copy; local copy saved to {{AGENT_SLUG}}-outputs. "
+                       f"File it to the KB under *{entry.get('customer') or 'unscoped — ask {{OPERATOR_FIRST_NAME}}'}*? "
+                       f"Reply here to file or skip.")
+                res["notified_slack"] = notify_slack(msg)
+            results.append(res)
+        elif status in ("Declined", "Expired"):
+            res = {**entry, "result": status.lower()}
+            if args.notify:
+                res["notified_slack"] = notify_slack(
+                    f":x: *{status}:* {entry['doc_name']} — "
+                    f"{entry['recipient_name']} <{entry['recipient_email']}>.")
+            results.append(res)
+        else:
+            still_pending.append(entry)
+            results.append({**entry, "result": f"pending ({status})"})
+    save_state(still_pending)
+    print(json.dumps({"checked": len(items), "still_pending": len(still_pending),
+                      "results": results}, indent=2))
+    signed = sum(1 for r in results if r.get("result") == "signed")
+    errs = sum(1 for r in results if str(r.get("result", "")).startswith("api_error"))
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    verdict = "FAILED" if errs else "OK"
+    print(f"=== signwell-poll {stamp} {verdict}: {len(items)} checked, "
+          f"{signed} signed, {len(still_pending)} pending"
+          + (f", {errs} api errors" if errs else "") + " ===")
+
+
+def main():
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("send")
+    s.add_argument("--pdf", required=True)
+    s.add_argument("--name", required=True)
+    s.add_argument("--email", required=True)
+    s.add_argument("--subject", default="Proposal for your signature")
+    s.add_argument("--message", default="Please review and sign the attached proposal.")
+    s.add_argument("--customer", default=None)
+    s.add_argument("--live", action="store_true")
+    s.set_defaults(fn=cmd_send)
+
+    st = sub.add_parser("status")
+    st.add_argument("--id", required=True)
+    st.set_defaults(fn=cmd_status)
+
+    po = sub.add_parser("poll")
+    po.add_argument("--notify", action="store_true",
+                    help="post file-ask to Slack #proposals on signed/declined (cron mode)")
+    po.set_defaults(fn=cmd_poll)
+
+    args = p.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()

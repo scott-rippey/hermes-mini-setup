@@ -18,6 +18,7 @@ Enable/disable = the **`skills.disabled` list in `config.yaml`** + a gateway res
 | contact-onboarding | this repo | Add/link people (many-to-many, per-company role) |
 | deliverable-export | this repo | Markdown → branded DOCX/PDF → scratch dir → optional email/KB |
 | file-to-kb | this repo | The offer-then-file gate for uploads |
+| proposal-esign | this repo | Optional: proposals out for e-signature via SignWell + the 15-min collection poller ([proposal-esign.md](proposal-esign.md)) |
 | meeting-reports | your build (optional) | The nightly meeting pipeline |
 | google-workspace | bundled **(modified — this repo ships the mods)** | All Google I/O |
 | telephony | official **(modified — see telephony-mods/)** | Outbound calls (optional) |

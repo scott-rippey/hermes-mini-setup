@@ -15,7 +15,7 @@ Deterministic (no LLM) except ONE clearly-labeled section. Subject flips to ⚠�
 
 | Section | What it checks |
 |---|---|
-| Cron health | The **gateway process** + every job from its log: backup, meeting pipeline, docs-sync, brief, **the 15-min prep poller (staleness >35m = FAIL)**, per-call report outcomes, and yesterday's own digest |
+| Cron health | The **gateway process** + every job from its log: backup, meeting pipeline, docs-sync, brief, **the 15-min prep poller (staleness >35m = FAIL)**, per-call report outcomes, **the 15-min e-signature poller (optional; staleness + end-of-run marker; row gated on the skill dir)**, and yesterday's own digest |
 | **Docs repo push** | State-based: no upstream / unpushed commits / uncommitted files ⇒ FAIL |
 | Agent activity | Sessions, tool calls, tokens (the real signal on a flat-rate plan; est-cost is a footnote) |
 | Knowledge base | Filed docs vs GitHub-synced docs (each +24h/total — the docs-sync inflates a single "documents" number), chunks as embedded total, meetings +24h/total |
