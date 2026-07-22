@@ -17,7 +17,7 @@ Three free-response channels (no @mention needed), persona text instantiated fro
 |---|---|
 | `#general` | Chief of staff — SOUL itself, no extra prompt |
 | `#research` | Gather → synthesize → present-then-file; KB-first; explicit scope on every store |
-| `#proposals` | Consultative playbook drafter; pulls KB context; extracts missing inputs; **drafts, never sends** |
+| `#proposals-contracts` | Consultative playbook drafter + contract mode (skeleton-driven services agreements); pulls KB + operator-email context; discovers before drafting; **drafts, never sends** (sending happens only via the gated e-sign skill) |
 
 All three are **free-response channels** (`slack.free_response_channels` = their IDs): the agent replies to every message without needing an @-mention. The platform default is mention-gated — an install that skips this key looks alive but only answers when summoned.
 

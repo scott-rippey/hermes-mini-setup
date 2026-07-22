@@ -18,6 +18,8 @@ Every `{{PLACEHOLDER}}` used across `templates/`, and where its value comes from
 | `{{HOME}}` / `{{HERMES_VENV_PYTHON}}` | Absolute home dir / the platform venv python | /Users/… |
 | `{{MAC_USERNAME}}` | The dedicated macOS user created in Phase 1 (appears in absolute paths, e.g. the mcp-rag `config.yaml` wiring) | "agentbox" |
 | `{{JOB}}` / `{{SCRIPT}}` / `{{HOUR}}` / `{{MINUTE}}` | launchd instantiation values (schedule table in job.plist.template) | — |
+| `{{BUSINESS_LEGAL_NAME}}` | The exact registered contracting entity (contract skeleton — confirm suffix with the operator) | "Acme Automation, LLC" |
+| `{{STATE}}` | The operator's governing-law state (contract skeleton: governing law + mediation venue) | "North Carolina" |
 | `{{TIMEZONE}}` / `{{LOCATION}}` | From the interview | — |
 | `{{ROLE}}` / `{{BACKGROUND_BRIEF}}` / `{{WORK_TYPES}}` / `{{STACK_LIST}}` / `{{QUALITY_BAR}}` / `{{DELIVERABLE_FOCUS}}` / `{{VOICE_EXTRAS}}` | Interview-derived profile/persona content | — |
 | `{{HOME_ADDRESS}}` | Operator's travel origin (meeting-prep "leave by") — lives only in the instantiated script, never in docs | — |

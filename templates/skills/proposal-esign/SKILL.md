@@ -1,6 +1,6 @@
 ---
 name: proposal-esign
-description: Send a rendered proposal (or any PDF) out for e-signature via SignWell under {{OPERATOR_FIRST_NAME}}'s {{BUSINESS_NAME}} account, track it, and retrieve the signed PDF. Use when {{OPERATOR_FIRST_NAME}} approves sending a proposal for signature, asks to check signature status, or a signed document needs collecting.
+description: Send a rendered proposal or contract (or any PDF) out for e-signature via SignWell under {{OPERATOR_FIRST_NAME}}'s {{BUSINESS_NAME}} account, track it, and retrieve the signed PDF. Use when {{OPERATOR_FIRST_NAME}} approves sending a proposal or contract for signature, asks to check signature status, a signed document needs collecting, or a contract needs drafting (references/contract-skeleton.md).
 version: 1.0.0
 author: {{BUSINESS_NAME}}
 license: MIT
@@ -54,12 +54,19 @@ the letter:
   ({{OPERATOR_NAME}} · {{BUSINESS_NAME}}), date.
 - Keep the agreed substance verbatim — pricing, scope, and terms that got the verbal
   are settled; do not rewrite them.
-- End with an **Acceptance** section: one plain acceptance sentence that matches the
-  operator's deal model — if a signed proposal means agreement to MOVE FORWARD (not
-  a work authorization), say so: "By signing below, [Client] accepts this proposal
-  and agrees to move forward. A formal agreement covering payment terms and
-  conditions will follow." Add a validity window ("This proposal is valid for 30
-  days from the date above." — adjust per the operator), then the signature block.
+- End with the doc-type's correct closing — **the two types sign DIFFERENT things**:
+  - **PROPOSAL** → an **Acceptance** section matching the operator's deal model — if
+    a signed proposal means agreement to MOVE FORWARD (not a work authorization),
+    say so: "By signing below, [Client] accepts this proposal and agrees to move
+    forward. A formal agreement covering payment terms and conditions will follow."
+    Add a validity window ("This proposal is valid for 30 days from the date
+    above." — adjust per the operator), then the signature block.
+  - **CONTRACT** → NO move-forward language: a contract signature EXECUTES the
+    agreement. Contracts are drafted from **`references/contract-skeleton.md`**
+    (clause set, the operator's IP/license position, payment-plan defaults, and the
+    signatures section — its agent-guidance section is binding; personalize it at
+    install from Phase 0 answers). The skeleton already ends in the correct
+    signature block.
 
 ### 2. Send for signature (after the GO — Rule 1)
 
@@ -83,11 +90,11 @@ python .../signwell.py poll          # check ALL pending docs (interactive — n
 python .../signwell.py status --id <doc_id>   # one doc
 ```
 
-A **15-min launchd poller** (`ai.hermes.signwell-poll`, runs `poll --notify`) watches pending docs in the background: on a signed doc it downloads the PDF to `~/{{AGENT_SLUG}}-outputs/<date>-<doc>-SIGNED.pdf` and posts a file-ask to Slack #proposals. **No email is sent — SignWell itself emails the operator the signed copy.** When a signature lands (via the cron's Slack post, or `"result": "signed"` from your own poll):
+A **15-min launchd poller** (`ai.hermes.signwell-poll`, runs `poll --notify`) watches pending docs in the background: on a signed doc it downloads the PDF to `~/{{AGENT_SLUG}}-outputs/<date>-<doc>-SIGNED.pdf` and posts a file-ask (with an @-mention) to the proposals channel — the target comes from `SIGNWELL_NOTIFY_CHANNEL` in `.env` (set it to the channel ID: rename-proof). **No email is sent — SignWell itself emails the operator the signed copy.** When a signature lands (via the cron's Slack post, or `"result": "signed"` from your own poll):
 1. **Offer** to file the proposal (markdown + signed date + SignWell doc id + signer) into the KB under the customer — offer-then-file, never auto-store.
 2. Offer to draft the project kickoff for approval.
 
-`Declined` / `Expired`: the cron posts it to #proposals; no automatic follow-up.
+`Declined` / `Expired`: the cron posts it to the same channel; no automatic follow-up.
 
 ## Notes
 - Signed docs also remain in the operator's SignWell dashboard (full audit trail) — the API and GUI are the same account.

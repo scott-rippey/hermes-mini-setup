@@ -1,4 +1,4 @@
-# Proposal E-Sign — SignWell Pipeline (optional, recommended)
+# Proposals & Contracts E-Sign — SignWell Pipeline (optional, recommended)
 
 > The agent drafts a proposal in #proposals (KB + email grounded, discovery-first), renders it branded, and — behind a send-card gate — sends it for legally-binding e-signature via SignWell under the operator's own account. A 15-min poller catches the signature, saves the PDF, and asks in Slack whether to file it. Optional feature; recommend it to anyone who sends client proposals — it closes the #proposals loop draft→send→signed→filed.
 
@@ -29,6 +29,10 @@
 4. **Send-card gate:** before EVERY live send the agent posts recipient + exact PDF + subject and waits for a confirm — even when the instruction already named them (intent-approval ≠ artifact-approval). `test_mode: true` is a free full rehearsal — no billing, not binding, and the recipient address gets a banner-wrapped preview (how you check branding without a live send).
 5. **Signature lands:** the poller detects it, saves the PDF, posts a file-ask to #proposals (`hermes send` — deterministic, no AI), prefixed with `<@member-id>` read from `SLACK_ALLOWED_USERS` in `.env` — a hard notification, self-configuring on any box. Interactive polls omit `--notify` so agent and cron never double-post.
 6. **Offer-then-file:** the operator replies; the agent files md + metadata (doc id, signer, signed date, artifact paths) under the send-time customer with people/company links. Never auto-stored.
+
+## Contract mode (one merged channel, not a second persona)
+
+The proposals channel doubles as the contracts channel (`#proposals-contracts` in the reference build) — one persona, two document types, routed by "proposal" vs "contract" in the ask. The operator's deal motion decides what each signature MEANS: commonly a signed proposal = move forward, and the contract = the executed agreement (some clients get both, some contract-only). Two contract entry paths: **from a signed proposal** (substance carried verbatim, pared into contract language + the itemized Schedule A and payment mechanics the proposal deferred) or **contract-only** (terms discovery from scratch: itemized scope, total, payment plan, maintenance tiers, start date). The legal skeleton ships at `templates/skills/proposal-esign/references/contract-skeleton.md` — a generic services agreement personalized at install ({{BUSINESS_LEGAL_NAME}}, {{STATE}} governing law/mediation, the operator's IP stance — shipped default: provider owns the work product + tools, client gets a perpetual non-transferable internal-use license that survives termination, no resale) — **recommend a one-time attorney review**; the agent is drafter-not-counsel and client redlines go to the operator. Contract signatures EXECUTE the agreement (never move-forward acceptance language). Same send-card gate, poller, and offer-then-file loop.
 
 ## Ops notes
 
