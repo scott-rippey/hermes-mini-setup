@@ -119,22 +119,29 @@ def download_signed(entry):
     return path
 
 
-def owner_mention():
-    """<@member-id> prefix from SLACK_ALLOWED_USERS in .env (hard notification)."""
+def _env_value(key):
     try:
         with open(os.path.expanduser("~/.hermes/.env")) as f:
             for line in f:
-                if line.startswith("SLACK_ALLOWED_USERS="):
-                    uid = line.split("=", 1)[1].strip().split(",")[0].strip()
-                    return f"<@{uid}> " if uid else ""
+                if line.startswith(key + "="):
+                    return line.split("=", 1)[1].strip()
     except OSError:
         pass
     return ""
 
 
+def owner_mention():
+    """<@member-id> prefix from SLACK_ALLOWED_USERS in .env (hard notification)."""
+    uid = _env_value("SLACK_ALLOWED_USERS").split(",")[0].strip()
+    return f"<@{uid}> " if uid else ""
+
+
 def notify_slack(text):
-    """Post to #proposals via the gateway (cron mode only). Returns ok bool."""
-    r = subprocess.run([HERMES, "send", "-t", "slack:#proposals", owner_mention() + text],
+    """Post the file-ask via the gateway (cron mode only). Channel from
+    SIGNWELL_NOTIFY_CHANNEL in .env (a channel ID is rename-proof; a #name
+    works too); falls back to #proposals. Returns ok bool."""
+    channel = _env_value("SIGNWELL_NOTIFY_CHANNEL") or "#proposals"
+    r = subprocess.run([HERMES, "send", "-t", f"slack:{channel}", owner_mention() + text],
                        capture_output=True, text=True)
     return r.returncode == 0
 
