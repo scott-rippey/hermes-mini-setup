@@ -80,6 +80,7 @@ EXTRA_HOME_PATHS = [
     "{{DOCS_REPO_DIR}}",
     "{{CC_MEMORY_DIR}}",  # Claude Code project memory dir (machine-specific path)
     ".claude/CLAUDE.md",
+    "Library/LaunchAgents",  # the ai.hermes.* launchd plists — restore = untar, not rebuild
 ]
 
 NAME_RE = re.compile(r"^{{AGENT_SLUG}}-backup-(\d{8}-\d{6})\.tar\.gz\.gpg$")
@@ -150,6 +151,7 @@ Created: {ts} (America/New_York)
      tar xzf bundle.tar.gz
    Contents: .hermes/ (config, skills, scripts, mcp-rag, secrets, tokens)
              hermes-setup/ (build docs repo incl. .git)   .claude/ (CC memory + global CLAUDE.md)
+             Library/LaunchAgents/ (the ai.hermes.* launchd plists)
              kb.sql (Postgres KB dump)   state.db, kanban.db (consistent snapshots)
 3. Restore KB (Postgres):
      createdb {PGDATABASE} 2>/dev/null; psql -d {PGDATABASE} -f kb.sql
@@ -159,6 +161,8 @@ Created: {ts} (America/New_York)
      rsync -a .hermes/ ~/.hermes/
      rsync -a hermes-setup/ ~/hermes-setup/
      rsync -a .claude/ ~/.claude/
+     rsync -a Library/LaunchAgents/ ~/Library/LaunchAgents/
+     for p in ~/Library/LaunchAgents/ai.hermes.*.plist; do launchctl load "$p"; done
 6. Re-apply source patches reverted by `hermes update` — see memories
    your tracked patch list (docs/operations.md).
 """

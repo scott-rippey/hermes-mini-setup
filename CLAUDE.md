@@ -64,7 +64,7 @@ You do, one at a time (build → hand-test → schedule from `templates/launchd/
 
 ## Phase 9 — Backups, ledger, self-push (do NOT skip)
 
-You do: nightly **encrypted** backup (KB dump + sqlite snapshots + config/secrets, gpg AES-256, passphrase in keychain) → their Drive via the agent token · `git init` the agent home as a **local-only change ledger** (secrets gitignored, no remote, ever) · docs repo auto-push to **their own private GitHub repo** (fine-grained single-repo PAT, keychain credential helper). **The passphrase gets an off-box copy the same day it's created** — a keychain-only passphrase means box loss destroys every backup. **Gate:** a full restore drill into a scratch DB; ledger diff appears in the next digest.
+You do: nightly **encrypted** backup (KB dump + sqlite snapshots + config/secrets + **the `~/Library/LaunchAgents` plists** — restore = untar, never rebuild jobs from docs; gpg AES-256, passphrase in keychain) → their Drive via the agent token · `git init` the agent home as a **local-only change ledger** (secrets gitignored, no remote, ever) · docs repo auto-push to **their own private GitHub repo** (fine-grained single-repo PAT, keychain credential helper). **The passphrase gets an off-box copy the same day it's created** — a keychain-only passphrase means box loss destroys every backup. **Gate:** a full restore drill into a scratch DB; ledger diff appears in the next digest.
 
 ## Phase 10 — Optional: outbound AI calls
 

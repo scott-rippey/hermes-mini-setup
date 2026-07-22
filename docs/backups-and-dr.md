@@ -18,7 +18,8 @@
 3. `~/.hermes` — config, SOUL, memories, skills (including your modified copies), scripts, **secrets** (.env, tokens), and the ledger's `.git`
 4. Your docs repo, **including `.git` history**
 5. Claude Code project memory + global CLAUDE.md (box-only knowledge)
-6. `RESTORE.txt` — the restore guide, embedded in every bundle
+6. `~/Library/LaunchAgents` — the `ai.hermes.*` plists (restore = untar + `launchctl load`, never rebuild the jobs from docs)
+7. `RESTORE.txt` — the restore guide, embedded in every bundle
 
 **Excluded (regenerable bulk):** the platform install, venvs, node_modules, browser drivers, caches, logs — keeps the bundle tens of MB instead of hundreds.
 

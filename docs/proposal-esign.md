@@ -27,7 +27,7 @@
 2. **Track A — verbal check:** the draft goes to the operator as an HTML email body; they edit and forward it themselves for a verbal yes. Conversational tone is correct here.
 3. **Track B — official:** on "make it official", the skill converts — strip email framing → formal header, substance verbatim, Acceptance section (deal-model sentence + validity window) + hidden tags. **Client-presentable PDF filename** — it's the document title recipients see.
 4. **Send-card gate:** before EVERY live send the agent posts recipient + exact PDF + subject and waits for a confirm — even when the instruction already named them (intent-approval ≠ artifact-approval). `test_mode: true` is a free full rehearsal — no billing, not binding, and the recipient address gets a banner-wrapped preview (how you check branding without a live send).
-5. **Signature lands:** the poller detects it, saves the PDF, posts a file-ask to #proposals (`hermes send` — deterministic, no AI). Interactive polls omit `--notify` so agent and cron never double-post.
+5. **Signature lands:** the poller detects it, saves the PDF, posts a file-ask to #proposals (`hermes send` — deterministic, no AI), prefixed with `<@member-id>` read from `SLACK_ALLOWED_USERS` in `.env` — a hard notification, self-configuring on any box. Interactive polls omit `--notify` so agent and cron never double-post.
 6. **Offer-then-file:** the operator replies; the agent files md + metadata (doc id, signer, signed date, artifact paths) under the send-time customer with people/company links. Never auto-stored.
 
 ## Ops notes

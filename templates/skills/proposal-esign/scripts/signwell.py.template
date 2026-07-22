@@ -119,9 +119,22 @@ def download_signed(entry):
     return path
 
 
+def owner_mention():
+    """<@member-id> prefix from SLACK_ALLOWED_USERS in .env (hard notification)."""
+    try:
+        with open(os.path.expanduser("~/.hermes/.env")) as f:
+            for line in f:
+                if line.startswith("SLACK_ALLOWED_USERS="):
+                    uid = line.split("=", 1)[1].strip().split(",")[0].strip()
+                    return f"<@{uid}> " if uid else ""
+    except OSError:
+        pass
+    return ""
+
+
 def notify_slack(text):
     """Post to #proposals via the gateway (cron mode only). Returns ok bool."""
-    r = subprocess.run([HERMES, "send", "-t", "slack:#proposals", text],
+    r = subprocess.run([HERMES, "send", "-t", "slack:#proposals", owner_mention() + text],
                        capture_output=True, text=True)
     return r.returncode == 0
 
