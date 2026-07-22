@@ -18,6 +18,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 HOME = Path.home()
@@ -26,6 +27,13 @@ HERMES = str(HOME / ".local/bin/hermes")
 GAPI = str(HOME / ".hermes/skills/productivity/google-workspace/scripts/google_api.py")
 OPERATOR = "{{OPERATOR_EMAIL}}"
 MANIFEST = HOME / ".hermes/skills/productivity/granola-meeting-reports/state/pending-brief.json"
+
+# Audio brief (optional, Kokoro local TTS): a spoken, LIGHTER cut of the brief attached
+# as m4a. SOFT dependency — no kokoro venv / model / render => email ships without audio.
+# Install: python3.11 -m venv ~/.hermes/kokoro-venv && pip install mlx-audio "misaki[en]"
+KOKORO_PY = str(HOME / ".hermes/kokoro-venv/bin/python")
+KOKORO_MODEL = "mlx-community/Kokoro-82M-bf16"
+KOKORO_VOICE = "af_heart"  # 54 voices ship with the model — af_*/am_* American, bf_/bm_ British, ...
 
 # Palette
 ACCENT = "#4f46e5"   # indigo
@@ -125,8 +133,27 @@ def digest_text(now, cal, mail, open_tasks, meeting_titles):
     return "\n".join(L)
 
 
-def synthesize(digest, now):
-    """GPT-5.5 synthesis via headless hermes. Returns an HTML fragment, or '' on failure."""
+def meetings_audio_context():
+    """Plain-text gist of each pending meeting report (for the audio TLDRs) — '' if none."""
+    try:
+        items = json.loads(MANIFEST.read_text())
+        if not isinstance(items, list) or not items:
+            return ""
+    except Exception:
+        return ""
+    out = []
+    for m in items:
+        if not isinstance(m, dict):
+            continue
+        text = re.sub(r"<[^>]+>", " ", m.get("html") or "")
+        text = re.sub(r"\s+", " ", html.unescape(text)).strip()[:600]
+        out.append(f"- {m.get('title') or '(untitled)'} | {m.get('company') or ''} | "
+                   f"{m.get('date') or ''} | {text}")
+    return "\n".join(out)
+
+
+def synthesize(digest, now, audio_meetings):
+    """GPT-5.5 synthesis via headless hermes. Returns (html_fragment, audio_script) — either '' on failure."""
     prompt = (
         "You are {{AGENT_NAME}}, {{OPERATOR_FIRST_NAME}}'s sharp executive assistant. Write {{OPERATOR_FIRST_NAME}}'s morning brief from the DATA below. "
         "SYNTHESIZE — do not relist the items. In 2-4 tight sentences say what today is really about: the single "
@@ -135,20 +162,60 @@ def synthesize(digest, now):
         "items; never invent anything not in the DATA. Sharp and useful — no greeting, no filler, no sign-off.\n\n"
         "Output ONLY an HTML fragment wrapped EXACTLY between <!--BRIEF--> and <!--/BRIEF--> — no <html>/<body>, no "
         "markdown, no code fences. Use only <p>, <strong>, <ul>, <li>. Do NOT use any tools; write from the DATA only.\n\n"
-        f"DATA:\n{digest}"
+        "THEN a SECOND, SEPARATE fragment wrapped EXACTLY between <!--AUDIO--> and <!--/AUDIO-->: a spoken "
+        "morning-brief script for text-to-speech, read aloud by a narrator during {{OPERATOR_FIRST_NAME}}'s drive. Plain prose "
+        "sentences ONLY — no HTML, no markdown, no bullets, no URLs, no emoji, no headings. It is a LIGHTER cut "
+        "than the written brief, roughly 250-450 words: greet {{OPERATOR_FIRST_NAME}} with the day and date; say what today is "
+        "really about; walk the calendar in order with times spoken as words (say 'ten thirty' not '10:30'); the "
+        "key tasks — work priorities first, and a trivial personal errand gets a few words at most, never "
+        "sentences of elaboration; anything notable in unread email, briefly; and for each new meeting report, "
+        "ONLY who it was with, when it was, and a one-to-two-sentence takeaway — never the full detail. Weight "
+        "the airtime by importance: the day's real priorities get the words, small stuff gets a passing mention "
+        "or nothing. Close with one short send-off line.\n\n"
+        f"DATA:\n{digest}\n"
+        + (f"\nMEETING REPORT GISTS (for the audio takeaways only):\n{audio_meetings}\n" if audio_meetings else "")
     )
     env = {**os.environ, "HOME": str(HOME),
            "PATH": "/opt/homebrew/bin:" + str(HOME / ".local/bin") + ":" + str(HOME / ".hermes/bin") + ":/usr/bin:/bin:/usr/sbin:/sbin"}
     try:
         r = subprocess.run([HERMES, "-z", prompt], capture_output=True, text=True, timeout=300, env=env)
     except Exception:
-        return ""
+        return "", ""
     out = r.stdout or ""
     m = re.search(r"<!--BRIEF-->(.*?)<!--/BRIEF-->", out, re.S)
     frag = (m.group(1) if m else out).strip()
     frag = re.sub(r"```html|```", "", frag).strip()
-    # guard: if it doesn't look like HTML, treat as failure (fall back)
-    return frag if ("<p" in frag or "<ul" in frag or "<li" in frag) else ""
+    a = re.search(r"<!--AUDIO-->(.*?)<!--/AUDIO-->", out, re.S)
+    script = (a.group(1).strip() if a else "")
+    script = re.sub(r"<[^>]+>", "", script).strip()  # belt-and-suspenders: strip stray tags
+    # guard: if the brief doesn't look like HTML, treat as failure (fall back)
+    if not ("<p" in frag or "<ul" in frag or "<li" in frag):
+        frag = ""
+    return frag, script
+
+
+def render_audio(script, now):
+    """Kokoro TTS: script -> m4a. Returns path or None; ANY failure => no attachment."""
+    if not script or len(script) < 80 or not Path(KOKORO_PY).exists():
+        return None
+    try:
+        workdir = Path(tempfile.mkdtemp(prefix="brief-audio-"))
+        r = subprocess.run(
+            [KOKORO_PY, "-m", "mlx_audio.tts.generate", "--model", KOKORO_MODEL,
+             "--voice", KOKORO_VOICE, "--join_audio", "--output_path", str(workdir),
+             "--file_prefix", "brief", "--text", script],
+            capture_output=True, text=True, timeout=600,
+        )
+        wavs = sorted(workdir.glob("brief*.wav"))
+        if r.returncode != 0 or not wavs:
+            return None
+        wav = wavs[0]
+        m4a = workdir / f"Morning Brief {now.strftime('%b %-d')}.m4a"
+        c = subprocess.run(["/usr/bin/afconvert", "-f", "m4af", "-d", "aac",
+                            str(wav), str(m4a)], capture_output=True, text=True, timeout=120)
+        return str(m4a) if (c.returncode == 0 and m4a.exists()) else None
+    except Exception:
+        return None
 
 
 def details_block(cal, mail, open_tasks):
@@ -212,14 +279,15 @@ def main():
         mtitles = []
 
     digest = digest_text(now, cal, mail, open_tasks, mtitles)
-    synthesis_html = synthesize(digest, now)
+    synthesis_html, audio_script = synthesize(digest, now, meetings_audio_context())
+    audio_path = render_audio(audio_script, now)
     body = build_html(now, synthesis_html, meetings_html, cal, mail, open_tasks)
     subject = f'☀️ Morning Brief — {now.strftime("%a %b %-d")}'
 
-    send = subprocess.run(
-        [PY, GAPI, "gmail", "send", "--to", OPERATOR, "--subject", subject, "--body", body, "--html"],
-        capture_output=True, text=True, timeout=120,
-    )
+    cmd = [PY, GAPI, "gmail", "send", "--to", OPERATOR, "--subject", subject, "--body", body, "--html"]
+    if audio_path:
+        cmd += ["--attach", audio_path]
+    send = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     stamp = now.strftime("%Y-%m-%d %H:%M %Z")
     if send.returncode == 0:
         if n_meet:
@@ -228,7 +296,8 @@ def main():
             except Exception:
                 pass
         print(f"[{stamp}] sent brief: {len(cal)} events, {len(mail)} unread, {len(open_tasks)} tasks, "
-              f"{n_meet} meeting(s), synthesis={'yes' if synthesis_html else 'FALLBACK'}")
+              f"{n_meet} meeting(s), synthesis={'yes' if synthesis_html else 'FALLBACK'}, "
+              f"audio={'yes' if audio_path else 'skipped'}")
     else:
         print(f"[{stamp}] SEND FAILED: {send.stderr.strip() or send.stdout.strip()}")
 

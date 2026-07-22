@@ -9,6 +9,8 @@
 3. **Polished HTML email** — synthesis leads; raw facts demoted to a compact "details" block. Mobile-first (no wide tables — card-style sections). No PDF, ever.
 4. **Meeting reports inline:** anything the previous night's meeting pipeline queued renders inside the brief.
 
+**Audio brief (optional):** the 8am email can carry an **m4a audio version** narrated by Kokoro local TTS (`mlx-community/Kokoro-82M-bf16`, dedicated venv `~/.hermes/kokoro-venv` — same isolation pattern as scrapling; 54 voices, pick one in `KOKORO_VOICE`). The same synthesis call emits a second `<!--AUDIO-->` fragment: a spoken script that is a **lighter cut** — the day's shape, calendar with times as words, key tasks (work first, trivial errands get a few words), email in passing, meeting reports compressed to who/when/takeaway. Rendered `mlx_audio.tts.generate --join_audio` → `afconvert` → m4a → attached. **Soft dependency:** no venv or any TTS failure → the brief ships without audio (`audio=skipped`), never fails. Fully local — brief content (calendar/email) never leaves the box for TTS; that's why cloud TTS was rejected.
+
 ## Ops digest — 8:10 (`templates/scripts/ops_digest.py.template`)
 
 Deterministic (no LLM) except ONE clearly-labeled section. Subject flips to ⚠️ on any failure. Its stance: **silence is never success** — every subsystem has a row, including "supposed-to-exist-and-doesn't" states like an unpushed docs repo.
