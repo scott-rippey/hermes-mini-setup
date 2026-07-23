@@ -146,7 +146,7 @@ def meetings_audio_context():
         if not isinstance(m, dict):
             continue
         text = re.sub(r"<[^>]+>", " ", m.get("html") or "")
-        text = re.sub(r"\s+", " ", html.unescape(text)).strip()[:600]
+        text = re.sub(r"\s+", " ", html.unescape(text)).strip()[:2000]
         out.append(f"- {m.get('title') or '(untitled)'} | {m.get('company') or ''} | "
                    f"{m.get('date') or ''} | {text}")
     return "\n".join(out)
@@ -168,7 +168,7 @@ def synthesize(digest, now, audio_meetings):
         "than the written brief, roughly 250-450 words: greet {{OPERATOR_FIRST_NAME}} with the day and date; say what today is "
         "really about; walk the calendar in order with times spoken as words (say 'ten thirty' not '10:30'); the "
         "key tasks — work priorities first, and a trivial personal errand gets a few words at most, never "
-        "sentences of elaboration; anything notable in unread email, briefly; and for each new meeting report, "
+        "sentences of elaboration; anything notable in unread email, briefly; and for each new meeting report (these are YESTERDAY'S meetings — frame them that way, e.g. 'yesterday you met with…'), "
         "ONLY who it was with, when it was, and a one-to-two-sentence takeaway — never the full detail. Weight "
         "the airtime by importance: the day's real priorities get the words, small stuff gets a passing mention "
         "or nothing. Close with one short send-off line.\n\n"
