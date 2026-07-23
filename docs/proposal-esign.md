@@ -1,4 +1,4 @@
-# Proposals & Contracts E-Sign — SignWell Pipeline (optional, recommended)
+# Proposals & Contracts E-Sign — SignWell Pipeline (optional, strongly recommended)
 
 > The agent drafts a proposal in #proposals (KB + email grounded, discovery-first), renders it branded, and — behind a send-card gate — sends it for legally-binding e-signature via SignWell under the operator's own account. A 15-min poller catches the signature, saves the PDF, and asks in Slack whether to file it. Optional feature; recommend it to anyone who sends client proposals — it closes the #proposals loop draft→send→signed→filed.
 

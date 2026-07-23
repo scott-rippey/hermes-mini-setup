@@ -16,11 +16,11 @@ Underneath is the official [Nous Research Hermes Agent](https://github.com/NousR
 
 ## What you end up with
 
-- **Slack as the daily driver** — persona channels (chief-of-staff / research / proposals), voice notes auto-transcribed, no public endpoints anywhere (outbound Socket Mode only)
-- **Proposals that close** — the #proposals persona discovers before it drafts (KB + your email), and the optional SignWell pipeline sends the rendered proposal for legally-binding e-signature behind a send-card gate, then polls the signature home and files it — still zero ingress
+- **Slack as the daily driver** — persona channels (chief-of-staff / research / proposals-contracts), voice notes auto-transcribed, no public endpoints anywhere (outbound Socket Mode only)
+- **Proposals & contracts that close** — one persona routes "proposal" vs "contract": proposals are discovered before drafted (KB + your email), contracts draft from a generic services-agreement skeleton personalized to your entity and terms, and the SignWell pipeline (strongly recommended) sends either for legally-binding e-signature behind a send-card gate, then polls the signature home and files it — still zero ingress. Skip SignWell and the persona simply emails finished drafts to you to send and collect signatures yourself
 - **A private knowledge base** (Postgres + pgvector, local) — customers, contacts, apps, meetings, documents; semantic search; every write human-approved. Your own repos' `CLAUDE.md` + `docs/` sync in nightly (deterministic, no AI), so the agent always knows your apps' current state
 - **Web research & scraping** — live web search and page extraction in every persona plus a dedicated research channel, with a stealth-scraping skill for bot-hostile pages; findings are presented to you and filed to the KB only on your say-so
-- **Morning intelligence** — a synthesized daily brief (calendar + email + tasks) and a deterministic ops digest that watches every subsystem, including itself
+- **Morning intelligence** — a synthesized daily brief (calendar + email + tasks) delivered as HTML **plus a spoken m4a version** narrated by on-box TTS (free, fully local — your calendar and email never leave the machine for narration), and a deterministic ops digest that watches every subsystem, including itself
 - **Meeting intelligence** — a nightly pipeline pulls your meeting notes over MCP (the reference build uses [Granola](https://granola.ai); optional, and any notes provider with an MCP server can slot in), structures each meeting into the KB under the right customer and person, and inlines the report in the next morning's brief; prep emails land ~2h before meetings, with traffic-aware "leave by" guidance when the invite has an address
 - **Outbound AI phone calls** (optional) — approval-gated task calls with automatic MP3 + transcript + AI-breakdown reports to your inbox
 - **Self-tracking infrastructure** — nightly encrypted off-site backups, a git change-ledger of the system itself, daily AI-written (and diff-grounded) change reports, and the agent's docs pushed to your own private repo
@@ -36,7 +36,7 @@ Underneath is the official [Nous Research Hermes Agent](https://github.com/NousR
 | Google Workspace | Your own domain, with a second user seat for the agent's identity |
 | Slack | A free workspace is fine |
 | OpenAI API key | Embeddings only (typically well under $5/mo) |
-| Optional | Granola or any MCP meeting-notes provider (meeting pipeline) · Bland.ai (phone calls) · SignWell (proposal e-signature — free at low volume) · a private GitHub repo (docs self-backup) · Google Routes API (live-traffic ETAs) |
+| Optional | Granola or any MCP meeting-notes provider (meeting pipeline) · Bland.ai (phone calls) · SignWell (proposal/contract e-signature — free at low volume, **strongly recommended**) · a private GitHub repo (docs self-backup) · Google Routes API (live-traffic ETAs) |
 
 Plan a **full day** end-to-end (the reference build took ~1.5 days including tearing out a predecessor system and making every decision fresh — you're inheriting the decisions). The phases pause cleanly, so splitting across evenings works fine.
 
@@ -48,7 +48,7 @@ cd hermes-mini-setup
 # open Claude Code here, then say: "let's begin"
 ```
 
-`CLAUDE.md` is the installer's brain — phases, decision points, verification gates, and every gotcha we hit so you don't have to. The 12 deep-dive feature docs in [`docs/`](docs/) (architecture → security → operations) are what the installer builds from, and solid reading on their own.
+`CLAUDE.md` is the installer's brain — phases, decision points, verification gates, and every gotcha we hit so you don't have to. The 14 deep-dive feature docs in [`docs/`](docs/) (architecture → security → operations) are what the installer builds from, and solid reading on their own.
 
 ## Provenance
 
