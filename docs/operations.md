@@ -21,6 +21,8 @@
 
 User LaunchAgents in `~/Library/LaunchAgents/ai.hermes.*.plist`, logs in `~/.hermes/logs/`. Gateway: `hermes gateway start|stop|restart|status`. Crons: `launchctl bootstrap|bootout gui/$(id -u) <plist>`.
 
+**Zero-token ops slash commands from Slack** (`quick_commands` in config.yaml — shell exec, no LLM, 30s timeout; invoke with the `!` prefix — `!jobs` etc. — because Slack intercepts unregistered `/` commands client-side; registering them natively on the Slack app is optional cosmetics, and `!` also works inside threads): the reference build ships `/jobs` (launchd jobs + last exit codes), `/backup-status` (backup log tail + newest bundles), `/reminders` (pending one-shots via `templates/scripts/list_reminders.py.template`, flags rule-violating recurring jobs). Use absolute paths in the commands; quick commands are checked before skill commands, so don't name one after a skill.
+
 ## Standard procedures
 
 - **Config change:** edit → YAML-validate → gateway restart → the ledger records it tonight (or commit deliberately with a message).
@@ -33,14 +35,18 @@ User LaunchAgents in `~/Library/LaunchAgents/ai.hermes.*.plist`, logs in `~/.her
 
 Pre: `updates.pre_update_backup: true` (set it in Phase 2 and never unset) · commit the ledger · `hermes skills list-modified`.
 
+**Version-jump review BEFORE running the update** — read every release note between the pinned and target versions for **default-behavior flips**. Known ones past v0.17.0: **v0.19.0 made LLM-judged "smart approvals" the DEFAULT** (an AI reviewer assesses flagged commands instead of asking the human) — that silently replaces the human-in-the-loop approval posture this build is designed around; after updating across it, verify the approvals config still asks the operator (and `approvals.cron_mode: deny` still holds) before the gateway goes back up. v0.19 also adds a durable gateway delivery ledger (at-least-once Slack delivery — a reason TO take the update); v0.18 adds `/goal`, `/learn`, `/journey` — check `/learn`-created skills against default-deny.
+
 Update, then re-apply:
 1. **google-workspace modified scripts** ← [templates/google-workspace/](../templates/google-workspace/)
-2. **Skills reseed check:** newly bundled skills arrive ENABLED → add to `skills.disabled`
+2. **Skills reseed check:** newly bundled skills arrive ENABLED → add to `skills.disabled`; `agent.disabled_toolsets` survives (config), but re-scan the toolset registry for never-discussed new tools
 3. **Optional core hardening**, if you adopted it (both are small, platform-core edits — re-do after updates):
-   - *Skill-patch guard:* make the skill self-edit tool refuse fuzzy `block_anchor`/`context_aware` match strategies (in the platform's fuzzy-match/skill-manager tools) — prevents a background improvement loop from corrupting SKILL.md files via loose matches. The reference build adopted this after exactly that corruption.
+   - *Skill-patch guard:* make the skill self-edit tool refuse fuzzy `block_anchor`/`context_aware` match strategies (in the platform's fuzzy-match/skill-manager tools) — prevents a background improvement loop from corrupting SKILL.md files via loose matches. The reference build adopted this after exactly that corruption. (The primary gate is `skills.write_approval: true` — config, survives updates, nothing to re-apply; this patch is the mechanical layer beneath it.)
    - *Notice gate:* suppress a per-session model-compaction notice in chat if it bugs you (cosmetic).
+   - *Quick-command slash listener:* only if you natively registered custom quick commands on the Slack app — the platform's bolt listener patterns only built-in command names, so registered customs (e.g. `/jobs`) get "app did not respond" until you extend the pattern with the config's `quick_commands` keys (a few lines where `_slash_names` is built in the Slack adapter). The `!jobs` prefix form works without any patch.
 4. Telephony copy: untouched by updates (re-apply [telephony-mods](../templates/telephony-mods/PATCHES.md) only after a skill *reinstall*).
-5. Gateway restart → next morning's digest confirms the board.
+5. **Slack manifest refresh** (when taking the update that adds `--agent-view`): regenerate + paste into the app's App Manifest (ONE-WAY migration of the bot DM to Slack's Messages-tab agent experience; required eventually). A regenerated manifest restores every built-in slash command — re-apply any pruning + custom quick-command registrations (Slack caps an app at 50).
+6. Gateway restart → next morning's digest confirms the board.
 
 ## Troubleshooting quick-refs
 

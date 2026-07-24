@@ -18,6 +18,7 @@ Deterministic (no LLM) except ONE clearly-labeled section. Subject flips to ⚠�
 | Section | What it checks |
 |---|---|
 | Cron health | The **gateway process** + every job from its log: backup, meeting pipeline, docs-sync, brief, **the 15-min prep poller (staleness >35m = FAIL)**, per-call report outcomes, **the 15-min e-signature poller (optional; staleness + end-of-run marker; row gated on the skill dir)**, and yesterday's own digest |
+| **Platform cron (reminders)** | State-based watch on `~/.hermes/cron/jobs.json` (the agent-created reminder store — see [architecture.md](architecture.md)): empty or pending one-shots (named) ⇒ OK; **any RECURRING job ⇒ FAIL** (the one-shot-only rule was bypassed); a reminder in error state ⇒ FAIL. Self-activating — no artifact gate (an absent file = OK/empty) |
 | **Docs repo push** | State-based: no upstream / unpushed commits / uncommitted files ⇒ FAIL |
 | Agent activity | Sessions, tool calls, tokens (the real signal on a flat-rate plan; est-cost is a footnote) |
 | Knowledge base | Filed docs vs GitHub-synced docs (each +24h/total — the docs-sync inflates a single "documents" number), chunks as embedded total, meetings +24h/total |
@@ -25,6 +26,8 @@ Deterministic (no LLM) except ONE clearly-labeled section. Subject flips to ⚠�
 | **System changes** | The 3:05 ledger snapshot's diffstat + the **AI narrative** — the one synthesized section, hard-grounded (statements must be diff-evidenced; unsure ⇒ omit) with the raw diffstat always rendered beneath as checkable truth |
 | **Memory stores** | A daily mirror of the memory tool's drift check (format round-trip + budgets + refused-write detection) — run from *outside* the agent |
 | Voice balance | Prepaid phone credit (if the module's on), warn thresholds |
+
+After the email sends, a **one-line headline posts to Slack `#system-messages`** ("✅ all systems green" / "⚠️ N failing — named rows"), and a send-failure of the digest email itself posts a 🔴 line — otherwise that failure is invisible until the *next* digest grades it. Full report stays in email; the channel is scannable history ([slack-gateway.md](slack-gateway.md) has the channel's full feed list). Dry-run skips the headline too.
 
 ## The change-narrative feeder — 3:05 (`templates/scripts/system_changes.py.template`)
 

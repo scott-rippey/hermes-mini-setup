@@ -15,6 +15,7 @@ Enable/disable = the **`skills.disabled` list in `config.yaml`** + a gateway res
 | Skill | Source | Job |
 |---|---|---|
 | customer-onboarding | this repo | Interview → canonical customer + contacts-as-people |
+| customer-brief | this repo | **Read-only** account snapshot: deterministic gather (people/apps/meetings/KB inventory/pending e-sign) + scoped KB search + email search → one grounded "where are we with X" brief with an honest gaps line; offers deliverable-export |
 | contact-onboarding | this repo | Add/link people (many-to-many, per-company role) |
 | deliverable-export | this repo | Markdown → branded DOCX/PDF → scratch dir → optional email/KB |
 | file-to-kb | this repo | The offer-then-file gate for uploads |

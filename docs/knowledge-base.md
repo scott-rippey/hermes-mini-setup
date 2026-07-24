@@ -6,7 +6,9 @@
 
 - **DB:** local Postgres (Homebrew service, localhost-only), pgvector enabled. Built verbatim from [`sql/schema.sql`](../sql/schema.sql) + your generated seeds.
 - **Server:** the custom MCP server ([templates/mcp-rag/](../templates/mcp-rag/README.md)) — **the only writer**. Tools: `mcp_rag_store / search / get / customers / add_customer / people / add_person / apps / add_app / add_meeting`.
-- **Embeddings:** OpenAI `text-embedding-3-large` (3072-dim) on store; cosine search. (3072 exceeds pgvector's HNSW cap — fine at personal scale; `halfvec` is the scale path.)
+- **Embeddings:** OpenAI `text-embedding-3-large` (3072-dim) on store. (3072 exceeds pgvector's HNSW cap — fine at personal scale; `halfvec` is the scale path.)
+- **Search is HYBRID:** every query runs BOTH cosine-vector similarity AND Postgres full-text (`content_tsv` generated tsvector + GIN — already in `sql/schema.sql`; `websearch_to_tsquery`, so quoted phrases work), merged by **reciprocal-rank fusion** (k=60; no cross-method score normalization). Keyword catches exact terms/proper nouns embeddings miss; each result carries `match: vector|keyword|both`. An empty/stopword-only keyword branch degrades gracefully to vector-only.
+- **Results are one-per-DOCUMENT with small-to-big context:** chunk hits dedupe to their best-ranked document (no more one doc's chunks eating every slot). Content returned: the **full document** when ≤ `RAG_FULL_DOC_CHARS` (default 6000 chars — most KB docs fit) labeled `context: full_document`, else the matched chunk ± one neighbor labeled `context: window` (the agent calls `get` for the rest). Candidate pool = `max(limit×3, 15)` chunks per branch before fusion/dedup.
 
 ## The identity model (no-drift by construction)
 

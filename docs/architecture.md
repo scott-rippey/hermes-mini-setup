@@ -36,6 +36,7 @@ phone (outbound-only, provider cloud)                 main model (flat-rate OAut
 ## Models & providers (reference stack)
 
 - **Chat (all personas):** GPT-5.5 via the **Codex OAuth** on a flat-rate ChatGPT Pro plan — token counts are the signal, dollars are not. Headless runs (`hermes -z`) ride the same path: brief synthesis, call reports, change narratives.
+- **Fallback chain (recommended, needs a second-provider key):** `fallback_providers: [{provider: anthropic, model: claude-sonnet-5}]` with `ANTHROPIC_API_KEY` in `.env` — on primary failure (429 after retries, 5xx outage, 401/403, 404, malformed responses) the turn finishes on the fallback with context preserved; **turn-scoped**, so every new message retries the primary first and outages self-heal. Detection: the ops digest's by-model token table (fallback-provider tokens appearing = it fired). Force-test after wiring: `hermes -m <nonexistent-model> -z "which model family are you?"` → the answer should come from the fallback.
 - **Aux:** a small model for web extraction. **Embeddings:** OpenAI `text-embedding-3-large` on a separate, metered API key that exists *only* for embeddings (pennies/month).
 - **STT:** local `faster-whisper` (model `small`) — Slack voice notes transcribe on-box, free.
 
@@ -73,6 +74,8 @@ KB scoping: the operator's own slug · `general` (non-customer research) · else
 
 The 3:05 → 3:10 → 3:15 ordering is deliberate: ledger commit, then docs push, then the encrypted bundle — all three nightly captures agree.
 
+**Reminders — the one sanctioned use of Hermes platform cron.** Separate from launchd: Hermes has an in-gateway scheduler (`~/.hermes/cron/jobs.json`, fired on the gateway's 60s tick) that the agent drives itself via the built-in `cronjob` tool — live in the Slack toolset by default. Sanctioned use is **one-shot reminders only** ("remind me Thursday at 3 to call X" → one-time job → Slack ping → Hermes auto-deletes the job after it fires). Recurring automation NEVER goes here — it gets built as a skill + launchd job, deliberately. Enforced three ways: a SOUL rule (in the SOUL template), the ops digest's "Platform cron (reminders)" row (any recurring job in the store ⇒ FAIL), and the nightly change ledger tracking every `jobs.json` change (gitignore `cron/output/` — run artifacts are noise, the job store is the signal). The two stores can't collide: the `cronjob` tool cannot see or touch launchd jobs.
+
 ## Git topology — three repos, three jobs
 
 | Repo | Direction | Purpose |
@@ -87,4 +90,6 @@ The 3:05 → 3:10 → 3:15 ordering is deliberate: ledger commit, then docs push
 
 ## Monitoring
 
-The morning **ops digest** is the system's daily self-exam: gateway process, every cron, docs-repo push state, **memory-store drift checks**, KB growth, token telemetry, (optional) phone balance, and the system-changes narrative. **Silence is never assumed to be success** — every subsystem has a row.
+The morning **ops digest** is the system's daily self-exam: gateway process, every cron, docs-repo push state, platform-cron (reminders) watch, **memory-store drift checks**, KB growth, token telemetry, (optional) phone balance, and the system-changes narrative. **Silence is never assumed to be success** — every subsystem has a row.
+
+**Same-moment layer — Slack `#system-messages`** (broadcast-only; `scripts/system_notify.sh` → `hermes send`, zero-token, works with the gateway down): gateway startups (hook — includes crash-recoveries), nightly-job failure pings at the moment of failure, and the digest's daily one-line headline. The digest remains the complete picture; the channel is the tap on the shoulder.

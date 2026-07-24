@@ -1,0 +1,4 @@
+name: system-notify
+description: Post gateway startup notices to the Slack system-messages channel
+events:
+  - gateway:startup

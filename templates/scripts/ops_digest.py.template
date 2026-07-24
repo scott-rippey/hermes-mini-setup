@@ -281,6 +281,40 @@ def gateway_row():
     return ("Gateway", "always-on", "ok", f"PID {pids[0]} · Slack gateway up", when)
 
 
+def platform_cron_row():
+    """In-gateway (agent-created) cron watch. Sanctioned use: ONE-SHOT reminders
+    only, created via the cronjob tool and auto-deleted by Hermes after firing.
+    A recurring job here means the one-shot-only rule was bypassed — flag it."""
+    path = HOME / ".hermes" / "cron" / "jobs.json"
+    label, sched = "Platform cron (reminders)", "agent-created"
+    if not path.exists():
+        return (label, sched, "ok", "empty — no pending reminders", None)
+    when = datetime.datetime.fromtimestamp(path.stat().st_mtime)
+    try:
+        data = json.loads(path.read_text())
+        jobs = data.get("jobs", []) if isinstance(data, dict) else data
+    except Exception as e:
+        return (label, sched, "fail", f"jobs.json unreadable: {e}", when)
+    if not jobs:
+        return (label, sched, "ok", "empty — no pending reminders", when)
+    def name(j):
+        return j.get("name") or j.get("id", "?")
+    recurring = [j for j in jobs if j.get("schedule", {}).get("kind") != "once"]
+    if recurring:
+        return (label, sched, "fail",
+                ("RECURRING job(s) in agent cron — one-shot-only rule bypassed: "
+                 + ", ".join(name(j) for j in recurring))[:140], when)
+    errored = [j for j in jobs if j.get("last_status") == "error"
+               or j.get("state") == "error"]
+    if errored:
+        return (label, sched, "fail",
+                ("reminder(s) in error state: "
+                 + ", ".join(name(j) for j in errored))[:140], when)
+    return (label, sched, "ok",
+            (f"{len(jobs)} pending one-shot reminder(s): "
+             + ", ".join(name(j) for j in jobs))[:140], when)
+
+
 def cron_health():
     rows = [gateway_row()]
     sync_totals = None
@@ -312,6 +346,7 @@ def cron_health():
         else:
             status, detail, when = res
         rows.append((label, sched, status, detail, when))
+    rows.append(platform_cron_row())
     rows.append(docs_repo_row())
     return rows, sync_totals
 
@@ -672,7 +707,24 @@ def main(dry_run=False):
         print(f"[{stamp}] sent ops digest (cron_fail={any_fail}, sessions={total[0]})")
     else:
         print(f"[{stamp}] SEND FAILED: {send.stderr[-300:]}")
+        _headline_to_slack("🔴 ops digest EMAIL SEND FAILED — see ops-digest.log")
         sys.exit(1)
+
+    # One-line headline to the system-messages channel for scannable history
+    # (full report stays in email). Fail rows are named so the line is actionable.
+    if any_fail:
+        bad = [r[0] for r in cron if r[2] == "fail"] + [n for n, s, _ in memrows if s == "fail"]
+        _headline_to_slack(f"⚠️ ops digest: {len(bad)} failing — {', '.join(bad)[:180]}")
+    else:
+        _headline_to_slack("✅ ops digest: all systems green")
+
+
+def _headline_to_slack(msg):
+    """Best-effort post via system_notify.sh — never fails the digest."""
+    try:
+        subprocess.run([str(HOME / ".hermes/scripts/system_notify.sh"), msg], timeout=30)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

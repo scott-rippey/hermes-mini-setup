@@ -6,7 +6,7 @@
 
 Tools (over MCP / stdio):
   - store(content, title, customer?, person?, app?, metadata?)  chunk + embed + upsert, attached to a customer (and optionally a person and/or app)
-  - search(query, customer?, person?, app?, limit?)             semantic search, optionally scoped to a customer, person, or app
+  - search(query, customer?, person?, app?, limit?)             hybrid (vector + full-text, RRF-merged) search, one result per document with small-to-big context, optionally scoped to a customer, person, or app
   - get(document_id)                                            full document content
   - customers()                                                 list the canonical customer/identity registry
   - add_customer(name, aliases?)                                register a new customer/identity
@@ -62,6 +62,7 @@ AGENT_ID         = uuid.UUID(os.environ.get("RAG_AGENT_ID", "00000000-0000-0000-
 DEFAULT_CUSTOMER = os.environ.get("RAG_DEFAULT_CUSTOMER", "{{OWNER_SLUG}}")
 CHUNK_TOKENS     = int(os.environ.get("RAG_CHUNK_TOKENS", "400"))
 CHUNK_OVERLAP    = int(os.environ.get("RAG_CHUNK_OVERLAP", "50"))
+FULL_DOC_CHARS   = int(os.environ.get("RAG_FULL_DOC_CHARS", "6000"))  # search returns whole docs up to this size
 
 _oai = OpenAI()
 _enc = tiktoken.get_encoding("cl100k_base")  # text-embedding-3-* tokenizer
@@ -339,6 +340,11 @@ def _add_meeting(content, title, meeting_id=None, meeting_date=None, meeting_typ
 
 
 def _search(query, customer=None, person=None, app=None, limit: int = 5) -> list[dict]:
+    """Hybrid retrieval: vector similarity + Postgres full-text (content_tsv/GIN),
+    merged by reciprocal-rank fusion (k=60). FTS catches exact terms and proper
+    nouns embeddings miss; RRF avoids cross-method score normalization. Both
+    branches apply the same scope filters; result shape is unchanged except the
+    added `match` field (vector | keyword | both)."""
     qemb = _embed([query])[0]
     with _connect() as conn, conn.cursor() as cur:
         cust = _resolve_customer(customer, cur) if customer else None
@@ -347,37 +353,107 @@ def _search(query, customer=None, person=None, app=None, limit: int = 5) -> list
         pers_id = pers["id"] if pers else None
         ap = _resolve_app(app, cur) if app else None
         app_id = ap["id"] if ap else None
+        scope = """
+              d.user_id = %(ns)s AND d.agent_id = %(agent)s
+              AND (%(cust)s::uuid IS NULL OR EXISTS (SELECT 1 FROM document_customers dc
+                     WHERE dc.document_id = d.id AND dc.customer_id = %(cust)s::uuid))
+              AND (%(pers)s::uuid IS NULL OR EXISTS (SELECT 1 FROM document_people dp
+                     WHERE dp.document_id = d.id AND dp.person_id = %(pers)s::uuid))
+              AND (%(app)s::uuid IS NULL OR d.app_id = %(app)s::uuid)
+        """
         cur.execute(
-            """
+            f"""
+            WITH vec AS (
+                SELECT c.id AS chunk_id,
+                       row_number() OVER (ORDER BY c.embedding <=> %(qv)s::vector) AS rnk
+                FROM memory_chunks c
+                JOIN memory_documents d ON d.id = c.document_id
+                WHERE c.embedding IS NOT NULL AND {scope}
+                ORDER BY c.embedding <=> %(qv)s::vector
+                LIMIT %(pool)s
+            ), kw AS (
+                SELECT c.id AS chunk_id,
+                       row_number() OVER (
+                           ORDER BY ts_rank_cd(c.content_tsv,
+                                               websearch_to_tsquery('english', %(q)s)) DESC) AS rnk
+                FROM memory_chunks c
+                JOIN memory_documents d ON d.id = c.document_id
+                WHERE c.content_tsv @@ websearch_to_tsquery('english', %(q)s) AND {scope}
+                ORDER BY ts_rank_cd(c.content_tsv, websearch_to_tsquery('english', %(q)s)) DESC
+                LIMIT %(pool)s
+            ), merged AS (
+                SELECT COALESCE(vec.chunk_id, kw.chunk_id) AS chunk_id,
+                       COALESCE(1.0 / (60 + vec.rnk), 0)
+                     + COALESCE(1.0 / (60 + kw.rnk), 0) AS rrf,
+                       vec.rnk IS NOT NULL AS in_vec,
+                       kw.rnk IS NOT NULL AS in_kw
+                FROM vec FULL OUTER JOIN kw ON kw.chunk_id = vec.chunk_id
+            )
             SELECT c.content, d.path, d.id,
-                   1 - (c.embedding <=> %s::vector) AS similarity,
+                   1 - (c.embedding <=> %(qv)s::vector) AS similarity,
                    (SELECT slug FROM customers cu WHERE cu.id = d.customer_id) AS customer,
                    (SELECT slug FROM people pp WHERE pp.id = d.person_id) AS person,
                    (SELECT slug FROM apps ap WHERE ap.id = d.app_id) AS app,
                    (SELECT array_agg(cu.slug ORDER BY cu.slug) FROM document_customers dc
                     JOIN customers cu ON cu.id = dc.customer_id WHERE dc.document_id = d.id) AS customers,
                    (SELECT array_agg(pp.slug ORDER BY pp.slug) FROM document_people dp
-                    JOIN people pp ON pp.id = dp.person_id WHERE dp.document_id = d.id) AS people
-            FROM memory_chunks c
+                    JOIN people pp ON pp.id = dp.person_id WHERE dp.document_id = d.id) AS people,
+                   m.in_vec, m.in_kw, c.chunk_index
+            FROM merged m
+            JOIN memory_chunks c ON c.id = m.chunk_id
             JOIN memory_documents d ON d.id = c.document_id
-            WHERE d.user_id = %s AND d.agent_id = %s
-              AND (%s::uuid IS NULL OR EXISTS (SELECT 1 FROM document_customers dc
-                     WHERE dc.document_id = d.id AND dc.customer_id = %s::uuid))
-              AND (%s::uuid IS NULL OR EXISTS (SELECT 1 FROM document_people dp
-                     WHERE dp.document_id = d.id AND dp.person_id = %s::uuid))
-              AND (%s::uuid IS NULL OR d.app_id = %s::uuid)
-            ORDER BY c.embedding <=> %s::vector
-            LIMIT %s
+            ORDER BY m.rrf DESC, similarity DESC NULLS LAST
+            LIMIT %(pool)s
             """,
-            (_vec(qemb), NAMESPACE, AGENT_ID, cust_id, cust_id, pers_id, pers_id, app_id, app_id, _vec(qemb), limit),
+            {"qv": _vec(qemb), "q": query, "ns": NAMESPACE, "agent": AGENT_ID,
+             "cust": cust_id, "pers": pers_id, "app": app_id,
+             "pool": max(limit * 3, 15)},
         )
         rows = cur.fetchall()
-    return [
-        {"title": r[1], "document_id": str(r[2]), "similarity": round(float(r[3]), 4),
-         "customer": r[4], "person": r[5], "app": r[6],
-         "customers": list(r[7] or []), "people": list(r[8] or []), "content": r[0]}
-        for r in rows
-    ]
+
+        # Small-to-big context expansion, one result per DOCUMENT: chunks find
+        # the hit, but a bare 400-token chunk starves the model of context.
+        # Dedupe chunk hits to their best-ranked document; return the full
+        # document when it's small enough, else the matched chunk ± one
+        # neighbor (chunks overlap ~50 tokens, so seams repeat a little).
+        results, seen_docs = [], set()
+        for r in rows:
+            doc_id = r[2]
+            if doc_id in seen_docs:
+                continue
+            seen_docs.add(doc_id)
+            results.append(r)
+            if len(results) >= limit:
+                break
+
+        out = []
+        for r in results:
+            doc_id = r[2]
+            cur.execute("SELECT content FROM memory_documents WHERE id = %s", (doc_id,))
+            full = (cur.fetchone() or [""])[0] or ""
+            if len(full) <= FULL_DOC_CHARS:
+                content, context = full, "full_document"
+            else:
+                cur.execute(
+                    """
+                    SELECT n.content FROM memory_chunks n
+                    WHERE n.document_id = %s AND n.chunk_index BETWEEN %s AND %s
+                    ORDER BY n.chunk_index
+                    """,
+                    (doc_id, r[11] - 1, r[11] + 1),
+                )
+                window = [w[0] for w in cur.fetchall()]
+                content = "\n[…]\n".join(window) if window else r[0]
+                context = "window"
+            out.append(
+                {"title": r[1], "document_id": str(doc_id),
+                 "similarity": round(float(r[3]), 4) if r[3] is not None else None,
+                 "customer": r[4], "person": r[5], "app": r[6],
+                 "customers": list(r[7] or []), "people": list(r[8] or []),
+                 "match": "both" if (r[9] and r[10]) else ("vector" if r[9] else "keyword"),
+                 "context": context,  # full_document | window (use get() for the rest)
+                 "content": content})
+    return out
 
 
 def _get(document_id: str) -> dict:
@@ -417,7 +493,7 @@ def add_meeting(content: str, title: str, meeting_id: str | None = None, meeting
 
 @mcp.tool()
 def search(query: str, customer: str | None = None, person: str | None = None, app: str | None = None, limit: int = 5) -> list[dict]:
-    """Search the user's KNOWLEDGE BASE ("KB" / "knowledge base") — semantic search over stored documents. ALWAYS use this (NOT built-in memory) whenever the user asks to search/find/look up/recall something in the knowledge base or KB, or about a customer, proposal, app, or research. Pass `customer` (name/slug/alias) to scope to one customer, `person` (name/slug/email/alias) to scope to one contact's documents, or `app` (name/slug/repo) to scope to one app's documentation; omit all to search across everything. A customer/person scope matches any document LINKED to them (documents can link to several people and companies — e.g. a multi-attendee meeting note), not just their primary filing. Returns the most relevant chunks with document_id, title, the primary customer/person/app, the full linked `customers`/`people` lists, and similarity. To read a whole document, call `get`."""
+    """Search the user's KNOWLEDGE BASE ("KB" / "knowledge base") — HYBRID search over stored documents: semantic (vector) AND keyword/full-text, rank-fused, so exact terms, names, and quoted phrases match as well as meanings. ALWAYS use this (NOT built-in memory) whenever the user asks to search/find/look up/recall something in the knowledge base or KB, or about a customer, proposal, app, or research. Pass `customer` (name/slug/alias) to scope to one customer, `person` (name/slug/email/alias) to scope to one contact's documents, or `app` (name/slug/repo) to scope to one app's documentation; omit all to search across everything. A customer/person scope matches any document LINKED to them (documents can link to several people and companies — e.g. a multi-attendee meeting note), not just their primary filing. Returns one result per matching DOCUMENT (best matches first) with document_id, title, the primary customer/person/app, the full linked `customers`/`people` lists, similarity, `match` (vector/keyword/both), and `context`: when `context` is "full_document" the `content` IS the whole document; when it is "window" the content is the matched region of a longer document — call `get` if you need the rest."""
     return _search(query, customer, person, app, limit)
 
 

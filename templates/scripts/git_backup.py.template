@@ -31,6 +31,12 @@ def g(*args, check=True):
     r = subprocess.run([GIT, "-C", REPO, *args], capture_output=True, text=True)
     if check and r.returncode != 0:
         log(f"FAILED: git {' '.join(args[:2])} -> {r.stderr.strip()[-300:]}")
+        try:  # same-moment Slack ping; best-effort, never masks the failure
+            subprocess.run([str(Path.home() / ".hermes/scripts/system_notify.sh"),
+                            f"🔴 nightly docs-repo push FAILED at git {args[0]} — see git-backup.log"],
+                           timeout=30)
+        except Exception:
+            pass
         sys.exit(1)
     return r
 

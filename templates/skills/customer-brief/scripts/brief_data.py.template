@@ -1,0 +1,134 @@
+# TEMPLATE — replace {{PLACEHOLDERS}} from setup/answers.md; installs to
+# ~/.hermes/skills/productivity/customer-brief/scripts/brief_data.py
+
+#!/usr/bin/env python3
+"""Deterministic data gather for the customer-brief skill (READ-ONLY).
+
+Usage: brief_data.py "<customer name | slug | alias>"
+
+Resolves the customer and prints ONE JSON object: identity, people, apps,
+recent meetings, KB document inventory (primary + linked), and any pending
+e-signature docs matched to the customer's people. The agent synthesizes the
+brief FROM this + its own KB/email searches; this script never writes anything.
+
+Zero non-stdlib deps: Postgres via `psql` JSON aggregation (same pattern as
+ops_digest.py), pending e-sign from ~/.hermes/signwell/pending.json.
+"""
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+PSQL = "/opt/homebrew/bin/psql"
+DB = "{{KB_DB_NAME}}"
+PENDING = Path.home() / ".hermes" / "signwell" / "pending.json"
+
+
+def q(sql):
+    """Run a SELECT that yields a single json value; return the parsed object."""
+    r = subprocess.run([PSQL, "-d", DB, "-At", "-c", sql],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"psql failed: {r.stderr.strip()[-300:]}")
+    out = r.stdout.strip()
+    return json.loads(out) if out else None
+
+
+def lit(s):
+    """SQL string literal (single-quote doubling)."""
+    return "'" + s.replace("'", "''") + "'"
+
+
+def main():
+    if len(sys.argv) != 2 or not sys.argv[1].strip():
+        print(json.dumps({"error": "usage: brief_data.py '<customer name|slug|alias>'"}))
+        sys.exit(1)
+    arg = sys.argv[1].strip()
+    L = lit(arg.lower())
+
+    cust = q(f"""
+        SELECT row_to_json(t) FROM (
+          SELECT id, slug, name, aliases, metadata, created_at::date AS since
+          FROM customers
+          WHERE slug = {L} OR lower(name) = {L}
+             OR {L} IN (SELECT lower(unnest(aliases)))
+          LIMIT 1
+        ) t""")
+    if not cust:
+        # loose fallback: substring on name/slug
+        cust = q(f"""
+            SELECT row_to_json(t) FROM (
+              SELECT id, slug, name, aliases, metadata, created_at::date AS since
+              FROM customers
+              WHERE slug ILIKE '%' || {L} || '%' OR name ILIKE '%' || {L} || '%'
+              ORDER BY length(slug) LIMIT 1
+            ) t""")
+    if not cust:
+        print(json.dumps({"error": f"no customer matched {arg!r}",
+                          "known": q("SELECT json_agg(slug ORDER BY slug) FROM customers")}))
+        sys.exit(2)
+    cid = lit(cust["id"])
+
+    people = q(f"""
+        SELECT COALESCE(json_agg(t ORDER BY t.is_primary DESC, t.name), '[]') FROM (
+          SELECT p.name, p.slug, p.email, cp.role, cp.is_primary
+          FROM customer_people cp JOIN people p ON p.id = cp.person_id
+          WHERE cp.customer_id = {cid}::uuid
+        ) t""")
+
+    apps = q(f"""
+        SELECT COALESCE(json_agg(t ORDER BY t.name), '[]') FROM (
+          SELECT name, slug, repo FROM apps WHERE customer_id = {cid}::uuid
+        ) t""")
+
+    meetings = q(f"""
+        SELECT COALESCE(json_agg(t), '[]') FROM (
+          SELECT m.title, m.meeting_date, m.meeting_type,
+                 p.name AS counterpart, m.document_id
+          FROM meetings m LEFT JOIN people p ON p.id = m.person_id
+          WHERE m.customer_id = {cid}::uuid
+          ORDER BY m.meeting_date DESC NULLS LAST LIMIT 10
+        ) t""")
+
+    docs = q(f"""
+        SELECT COALESCE(json_agg(t), '[]') FROM (
+          SELECT d.path AS title, d.id, d.updated_at::date AS updated,
+                 (SELECT slug FROM apps a WHERE a.id = d.app_id) AS app
+          FROM memory_documents d
+          WHERE d.customer_id = {cid}::uuid
+             OR EXISTS (SELECT 1 FROM document_customers dc
+                        WHERE dc.document_id = d.id AND dc.customer_id = {cid}::uuid)
+          ORDER BY d.updated_at DESC LIMIT 15
+        ) t""")
+    doc_count = q(f"""
+        SELECT json_build_object('total', count(*)) FROM memory_documents d
+        WHERE d.customer_id = {cid}::uuid
+           OR EXISTS (SELECT 1 FROM document_customers dc
+                      WHERE dc.document_id = d.id AND dc.customer_id = {cid}::uuid)""")
+
+    # Pending e-signature docs, matched by recipient email/name against the
+    # customer's people (unmatched pendings are omitted — other customers' business).
+    pending = []
+    try:
+        raw = json.loads(PENDING.read_text()) if PENDING.exists() else []
+        items = raw if isinstance(raw, list) else raw.get("pending", [])
+        emails = {(p.get("email") or "").lower() for p in people if p.get("email")}
+        names = {p["name"].lower() for p in people}
+        for it in items:
+            e = (it.get("email") or "").lower()
+            n = (it.get("name") or "").lower()
+            if (e and e in emails) or (n and n in names):
+                pending.append({k: it.get(k) for k in
+                                ("name", "email", "subject", "pdf", "sent_at", "document_id")})
+    except Exception as ex:
+        pending = [{"error": f"pending.json unreadable: {ex}"}]
+
+    print(json.dumps({
+        "customer": cust, "people": people, "apps": apps,
+        "meetings": meetings, "kb_docs": {"recent": docs, **(doc_count or {})},
+        "pending_esign": pending,
+    }, default=str))
+
+
+if __name__ == "__main__":
+    main()

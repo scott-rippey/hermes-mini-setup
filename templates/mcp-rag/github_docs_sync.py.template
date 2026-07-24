@@ -155,6 +155,13 @@ def main():
     stamp = time.strftime("%Y%m%d-%H%M%S")
     if failures:
         print(f"=== docs-sync {stamp} FAILED: {len(results)}/{len(apps)} apps ({'; '.join(failures)}) ===")
+        try:  # same-moment Slack ping; best-effort
+            import os
+            subprocess.run([os.path.expanduser("~/.hermes/scripts/system_notify.sh"),
+                            f"🔴 nightly GitHub docs-sync FAILED: {len(results)}/{len(apps)} apps ok ({'; '.join(failures)[:200]})"],
+                           timeout=30)
+        except Exception:
+            pass
     else:
         synced = sum(r["synced"] for r in results)
         pruned = sum(r["pruned"] for r in results)

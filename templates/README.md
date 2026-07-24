@@ -8,7 +8,7 @@ Every `{{PLACEHOLDER}}` used across `templates/`, and where its value comes from
 | `{{OPERATOR_EMAIL}}` | Their Workspace address (the **read** lane + sole auto-email recipient) | jane@her-domain.com |
 | `{{OPERATOR_CELL}}` | Their cell (profile seed; test-call target) | +1 … |
 | `{{BUSINESS_NAME}}` / `{{BUSINESS_ONE_LINER}}` | The company + what it does | — |
-| `{{AGENT_NAME}}` / `{{AGENT_NAME_UPPER}}` / `{{AGENT_SLUG}}` | Their Sidekick's name / UPPER / lowercase-slug | "Atlas" / "ATLAS" / "atlas" |
+| `{{AGENT_NAME}}` / `{{AGENT_NAME_UPPER}}` / `{{AGENT_SLUG}}` | Their agent's name / UPPER / lowercase-slug | "Atlas" / "ATLAS" / "atlas" |
 | `{{AGENT_EMAIL}}` | The agent's Workspace address (the **act** lane) | atlas@her-domain.com |
 | `{{OWNER_SLUG}}` | KB identity for the operator's own work | "jane" |
 | `{{KB_DB_NAME}}` | Postgres database name | "kb" |

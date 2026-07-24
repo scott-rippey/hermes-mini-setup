@@ -1,0 +1,22 @@
+# TEMPLATE — no placeholders needed; installs to ~/.hermes/scripts/list_reminders.py
+# (backs the /reminders quick command)
+
+#!/usr/bin/env python3
+"""List pending platform-cron reminders (for the /reminders quick command)."""
+import json
+from pathlib import Path
+
+p = Path.home() / ".hermes" / "cron" / "jobs.json"
+try:
+    d = json.loads(p.read_text()) if p.exists() else {}
+except Exception as e:
+    print(f"jobs.json unreadable: {e}")
+    raise SystemExit(0)
+jobs = d.get("jobs", []) if isinstance(d, dict) else d
+if not jobs:
+    print("no pending reminders")
+else:
+    for j in jobs:
+        kind = j.get("schedule", {}).get("kind", "?")
+        flag = "" if kind == "once" else "  ⚠️ RECURRING (rule violation)"
+        print(f"- {j.get('name', j.get('id', '?'))} → {str(j.get('next_run_at', '?'))[:16]}{flag}")

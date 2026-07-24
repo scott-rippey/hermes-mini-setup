@@ -1,6 +1,6 @@
 # Hermes Mini Setup — an AI chief-of-staff on a Mac mini, installed by Claude Code
 
-Build a complete, private, always-on AI assistant ("your Sidekick") on a Mac mini — driven day-to-day from Slack, grounded in your own knowledge base, with human approval gates on everything that leaves the machine.
+Build a complete, private, always-on AI assistant on a Mac mini — driven day-to-day from Slack, grounded in your own knowledge base, with human approval gates on everything that leaves the machine. (You'll name yours in the Phase 0 interview.)
 
 **The twist: Claude Code is the installer.** You don't follow this guide — Claude Code does. Clone the repo, open Claude Code inside it, and say **"let's begin."** It interviews you about your business, generates your agent's personality and profile, tells you exactly when to click what in each account signup, and does all the on-box work itself. You bring the accounts and the decisions; it brings the wiring.
 

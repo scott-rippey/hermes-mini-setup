@@ -21,6 +21,8 @@ Three free-response channels (no @mention needed), persona text instantiated fro
 
 All three are **free-response channels** (`slack.free_response_channels` = their IDs): the agent replies to every message without needing an @-mention. The platform default is mention-gated — an install that skips this key looks alive but only answers when summoned.
 
+**Plus one broadcast-only ops channel — `#system-messages`** (ID pinned as `SYSTEM_NOTIFY_CHANNEL` in `.env`; deliberately NOT free-response — nothing listens there). Fed by `scripts/system_notify.sh` (`hermes send` — zero-token, bot-token direct, works with the gateway down): gateway-startup notices (the `hooks/system-notify` gateway hook — fires on manual restarts, updates, AND crash-recoveries, so a crash loop is visible as a burst), same-moment failure pings from the nightly jobs (backup, docs push, docs-sync, marker-wrapped crons), and the digest's daily one-line headline. The platform's own "♻ Gateway restarted/shutting down" session notices are OFF (`slack.gateway_restart_notification: false`) — the hook's line replaces them; if the hook is ever removed, restarts go silent rather than falling back to a persona channel.
+
 ## Media in — and what does NOT happen
 
 - **Voice notes** auto-transcribe at the gateway (local `faster-whisper`, on-box, free) and inject as text. Model: `small` (`stt.local.model` — deliberately above the `base` default for accuracy).

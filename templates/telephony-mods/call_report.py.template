@@ -90,7 +90,7 @@ def synthesize(context, transcript, meta_line):
         "1) verdict up top — did the task succeed (✅/⚠️/❌) and the single-sentence outcome; "
         "2) specifics agreed (dates, times, prices, names — exact); "
         "3) how the other party responded / anything notable; "
-        "4) follow-ups {{OPERATOR_FIRST_NAME}} or Sidekick should do. Be concrete; no filler. "
+        "4) follow-ups {{OPERATOR_FIRST_NAME}} or {{AGENT_NAME}} should do. Be concrete; no filler. "
         "Return ONLY the fragment between <!--CALL--> and <!--/CALL--> markers."
     )
     try:

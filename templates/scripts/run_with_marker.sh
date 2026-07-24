@@ -9,5 +9,6 @@ if [ "$rc" -eq 0 ]; then
   echo "=== ${label} $(date +%Y%m%d-%H%M%S) OK ==="
 else
   echo "=== ${label} $(date +%Y%m%d-%H%M%S) FAILED (exit ${rc}) ==="
+  "$HOME/.hermes/scripts/system_notify.sh" "🔴 ${label} cron FAILED (exit ${rc}) — see its log" || true
 fi
 exit $rc

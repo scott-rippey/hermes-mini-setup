@@ -19,7 +19,7 @@ uploads it to an "{{AGENT_NAME}} Backups" folder in the agent account's Drive (o
                         + global CLAUDE.md — box-only knowledge with no other copy.
 
 The bundle is AES-256 encrypted with a passphrase from the login keychain
-(service `{{AGENT_SLUG}}-backup-key`, acct `sidekick`) so the cloud copy is opaque
+(service `{{AGENT_SLUG}}-backup-key`, acct `{{AGENT_SLUG}}`) so the cloud copy is opaque
 even though it contains live credentials. Retention: 14 days in Drive, 1 copy
 local in ~/backups/. A RESTORE.txt is embedded in every bundle.
 
@@ -298,6 +298,16 @@ def main():
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def _system_notify(msg):
+    """Same-moment Slack ping to the system-messages channel on failure
+    (zero-token, best-effort — a dead notifier must never mask the real failure)."""
+    try:
+        subprocess.run([str(Path.home() / ".hermes/scripts/system_notify.sh"), msg],
+                       timeout=30)
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
     try:
         main()
@@ -305,7 +315,9 @@ if __name__ == "__main__":
         log(f"FAILED: {e.cmd[:3]}... rc={e.returncode}")
         if e.stderr:
             log(f"stderr: {e.stderr[-500:]}")
+        _system_notify("🔴 nightly Drive backup FAILED — see backup.log")
         sys.exit(1)
     except Exception as e:
         log(f"FAILED: {e}")
+        _system_notify(f"🔴 nightly Drive backup FAILED: {type(e).__name__} — see backup.log")
         sys.exit(1)

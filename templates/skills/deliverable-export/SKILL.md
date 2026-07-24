@@ -58,5 +58,6 @@ Sends FROM the agent account  TO {{OPERATOR_FIRST_NAME}} — emailing {{OPERATOR
 
 ## Notes
 - Always save to `~/{{AGENT_SLUG}}-outputs/` even when emailing or KB-filing — scratch is the safety net ("don't lose it, even if not in the KB").
+- **Drop the file into Slack too (automatic):** in your final chat reply, state the output file's full absolute path in plain text OUTSIDE any code block — the Slack gateway's deliverable mode detects it and uploads the file into the channel as a native attachment. A path inside backticks/code fences is NOT picked up; write it bare.
 - "Scratch, KB, or both" is {{OPERATOR_FIRST_NAME}}'s call — confirm before KB-filing; scratch happens automatically.
 - If {{OPERATOR_FIRST_NAME}} did not specify, confirm the format(s) and delivery (scratch / KB / email).
