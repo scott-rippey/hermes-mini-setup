@@ -8,7 +8,7 @@ Build a complete, private, always-on AI assistant ("your Sidekick") on a Mac min
 
 Underneath is the official [Nous Research Hermes Agent](https://github.com/NousResearch/hermes-agent) (version-pinned, auto-update off). This repo is a **heavily customized operator build** of it — and the customization is the point. Stock Hermes is a capable general agent; these are the choices that make it something you can trust with your business:
 
-- **Default-deny everything.** Of ~80 bundled skills, this build enables **9**. Nothing runs that wasn't deliberately chosen — especially third-party connectors. New capability = a conscious enable, never a default.
+- **Default-deny everything.** Of ~80 bundled skills, this build enables **10**. Nothing runs that wasn't deliberately chosen — especially third-party connectors. New capability = a conscious enable, never a default.
 - **No way in.** No public endpoints (Slack connects outbound via Socket Mode), every service binds localhost, and the optional phone number is inbound-neutered — it announces and hangs up, structurally unable to converse or take instructions.
 - **Human gates on the way out.** Email beyond you, calls, calendar invites, KB writes — all drafted, then approved by you. The agent proposes; you dispose.
 - **It watches itself from outside.** A deterministic daily ops digest checks every cron, the memory store's integrity, the backups, and a git change-ledger of the system's own configuration — independent of the agent, so a degraded agent can't hide its own degradation.
@@ -16,7 +16,7 @@ Underneath is the official [Nous Research Hermes Agent](https://github.com/NousR
 
 ## What you end up with
 
-- **Slack as the daily driver** — persona channels (chief-of-staff / research / proposals-contracts), voice notes auto-transcribed, no public endpoints anywhere (outbound Socket Mode only)
+- **Slack as the daily driver** — persona channels (#general the chief of staff / #research / #proposals-contracts), voice notes auto-transcribed, no public endpoints anywhere (outbound Socket Mode only)
 - **Proposals & contracts that close** — one persona routes "proposal" vs "contract": proposals are discovered before drafted (KB + your email), contracts draft from a generic services-agreement skeleton personalized to your entity and terms, and the SignWell pipeline (strongly recommended) sends either for legally-binding e-signature behind a send-card gate, then polls the signature home and files it — still zero ingress. Skip SignWell and the persona simply emails finished drafts to you to send and collect signatures yourself
 - **A private knowledge base** (Postgres + pgvector, local) — customers, contacts, apps, meetings, documents; semantic search; every write human-approved. Your own repos' `CLAUDE.md` + `docs/` sync in nightly (deterministic, no AI), so the agent always knows your apps' current state
 - **Web research & scraping** — live web search and page extraction in every persona plus a dedicated research channel, with a stealth-scraping skill for bot-hostile pages; findings are presented to you and filed to the KB only on your say-so
@@ -36,7 +36,8 @@ Underneath is the official [Nous Research Hermes Agent](https://github.com/NousR
 | Google Workspace | Your own domain, with a second user seat for the agent's identity |
 | Slack | A free workspace is fine |
 | OpenAI API key | Embeddings only (typically well under $5/mo) |
-| Optional | Granola or any MCP meeting-notes provider (meeting pipeline) · Bland.ai (phone calls) · SignWell (proposal/contract e-signature — free at low volume, **strongly recommended**) · a private GitHub repo (docs self-backup) · Google Routes API (live-traffic ETAs) |
+| GitHub | A free account + one private repo (the agent's docs self-backup — Phase 9, not optional) |
+| Optional | Granola or any MCP meeting-notes provider (meeting pipeline) · Bland.ai (phone calls) · SignWell (proposal/contract e-signature — free at low volume, **strongly recommended**) · Google Routes API (live-traffic ETAs) |
 
 Plan a **full day** end-to-end (the reference build took ~1.5 days including tearing out a predecessor system and making every decision fresh — you're inheriting the decisions). The phases pause cleanly, so splitting across evenings works fine.
 

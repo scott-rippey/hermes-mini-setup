@@ -10,7 +10,7 @@ Platforms ship dozens of bundled skills **enabled by default** — the reference
 
 Enable/disable = the **`skills.disabled` list in `config.yaml`** + a gateway restart. There is **no** CLI disable subcommand — the list is the mechanism. Names come from each SKILL.md's frontmatter `name:` (directory names sometimes differ). Re-enable = delete one line. ⚠️ **Platform updates seed newly-bundled skills as ENABLED** — re-check the list after every update. Also set the background skill **curator off** — no robo-editor should touch a hand-curated set.
 
-## The working set (reference build: 9 enabled)
+## The working set (reference build: 10 enabled)
 
 | Skill | Source | Job |
 |---|---|---|

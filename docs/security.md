@@ -1,7 +1,7 @@
 # Security Model
 
 > The posture in one line: **no way in, human gates on the way out, everything foreign is data.**
-> Everything here ran (and runs) on the reference build; the incident log at the bottom is real.
+> Everything here ran (and runs) on the reference build.
 
 ## Threat model
 
@@ -58,9 +58,3 @@ Host: FileVault ON · sleep disabled · the app firewall is optional given zero 
 ## 6. Monitoring as a control
 
 The daily ops digest is the tripwire layer: gateway liveness, every cron's outcome, docs-repo push state, **memory-store drift checks** (a jammed store surfaces next morning, never as silent chat noise), and the **change ledger** — any config/skill/script change on the box shows up in the operator's inbox with a diffstat. A change nobody remembers making is visible within 24 hours.
-
-## Incident log from the reference build (all real, all absorbed into this design)
-
-- **The memory-drift loop:** a hand-authored profile file silently broke every memory write from day one — and the agent couldn't retain the fact that its memory was broken, because the mechanism it would use *was the broken one*. Fix: tool-shaped seeds + a daily drift check that lives *outside* the agent. ([memory-system.md](memory-system.md))
-- **Cloudflare vs. Python:** an API 403'd every request (error 1010) because it bans the default urllib user-agent signature. curl passing while your script fails is the tell; send a custom UA.
-- **The untracked config change:** a gate-bypass entry appeared in config with nobody sure when or why (an "always allow" tap during a busy evening, it turned out — pre-ledger). The class of problem is closed by the change ledger: config archaeology now takes one `git log` instead of guesswork.

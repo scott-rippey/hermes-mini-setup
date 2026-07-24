@@ -41,7 +41,7 @@ phone (outbound-only, provider cloud)                 main model (flat-rate OAut
 
 ## Interfaces
 
-- **Slack is the daily driver.** One bot, Socket Mode (an *outbound* websocket — no inbound listener), **allowlisted to the operator's member ID**. Channels = personas via `slack.channel_prompts` (the single canonical home for persona text): `#general` (chief of staff — SOUL itself), `#research` (present-then-file, KB-first), `#proposals` (playbook drafter, never sends). Inline replies.
+- **Slack is the daily driver.** One bot, Socket Mode (an *outbound* websocket — no inbound listener), **allowlisted to the operator's member ID**. Channels = personas via `slack.channel_prompts` (the single canonical home for persona text): `#general` (chief of staff — SOUL itself), `#research` (present-then-file, KB-first), `#proposals-contracts` (playbook drafter — proposal AND contract modes, never sends). Inline replies.
 - **Dashboard** (localhost only) — live sessions and the command panel. **CLI/TUI** on the box for admin.
 - **Phone** (optional) — outbound-only; the number's inbound side is a locked announcement in the provider's cloud ([telephony.md](telephony.md)).
 - **Sessions reset daily at 4am** (or 24h idle) — every morning starts fresh, which is how SOUL/config changes land automatically.
@@ -69,7 +69,7 @@ KB scoping: the operator's own slug · `general` (non-customer research) · else
 | github-docs-sync | 9:00p | Customer app docs → KB (optional; read-only PATs, no AI) |
 | meeting-reports | 10:00p | Meeting-notes pipeline (optional) |
 | meeting-prep | every 15m | Poll: meeting ~2h out → prep email (+ traffic-aware "leave by") |
-| signwell-poll | every 15m | Poll pending e-signatures (optional) → signed PDF + #proposals file-ask ([proposal-esign.md](proposal-esign.md)) |
+| signwell-poll | every 15m | Poll pending e-signatures (optional) → signed PDF + #proposals-contracts file-ask ([proposal-esign.md](proposal-esign.md)) |
 
 The 3:05 → 3:10 → 3:15 ordering is deliberate: ledger commit, then docs push, then the encrypted bundle — all three nightly captures agree.
 

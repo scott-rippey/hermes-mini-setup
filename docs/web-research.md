@@ -8,7 +8,7 @@ different places, and only one of them appears in the skills list.
 
 |                  | **Firecrawl**                                                              | **Scrapling**                                                        |
 |------------------|----------------------------------------------------------------------------|----------------------------------------------------------------------|
-| What it is       | Hosted API backing the agent's built-in `web_search` + `web_extract` tools | Bundled skill: a local stealth-scraping framework (open source, MIT) |
+| What it is       | Hosted API backing the agent's built-in `web_search` + `web_extract` tools | Official skill (hub-installed): a local stealth-scraping framework (open source, MIT) |
 | Where it's set up| `web.backend` in `~/.hermes/config.yaml` + `FIRECRAWL_API_KEY` in `~/.hermes/.env` | Skills phase — it's in the enabled keep-set                          |
 | Account / key    | Yes — free account at https://firecrawl.dev/ (500 credits/mo free tier)    | None. Fully local — no key, no account, no cost                      |
 | Used for         | Everyday research: search the web, fetch and read normal pages             | Hard pages: Cloudflare/bot walls, JS-rendered content, multi-page spidering |
