@@ -4,7 +4,7 @@
 
 ## The Slack app (Phase 5)
 
-- Create the app **from the generated manifest** (`hermes slack manifest`) — it sets scopes, events, Socket Mode, and slash commands in one shot. Name the bot after your agent.
+- Create the app **from the generated manifest** (`hermes slack manifest --agent-view` on platform ≥v0.19 — the Messages-tab agent experience; a one-way migration Slack requires eventually) — it sets scopes, events, Socket Mode, and slash commands in one shot. Name the bot after your agent. If you add custom quick-command entries to the manifest, **omit `usage_hint` rather than setting it to `""`** (Slack rejects empty strings), and expect a **reinstall prompt** whenever scopes change — the reinstall is what makes them take effect.
 - **Socket Mode** = an *outbound* websocket from the box to Slack. No inbound listener, no public URL — the load-bearing fact of the remote-access posture.
 - `.env`: `SLACK_BOT_TOKEN` (xoxb-), `SLACK_APP_TOKEN` (xapp-, `connections:write`), **`SLACK_ALLOWED_USERS`** (the operator's member ID — **set before the first message**), `SLACK_HOME_CHANNEL`.
 - Inline replies (`platforms.slack.extra.reply_in_thread: false`) keep channels conversational.

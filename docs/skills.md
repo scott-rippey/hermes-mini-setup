@@ -10,7 +10,7 @@ Platforms ship dozens of bundled skills **enabled by default** — the reference
 
 Enable/disable = the **`skills.disabled` list in `config.yaml`** + a gateway restart. There is **no** CLI disable subcommand — the list is the mechanism. Names come from each SKILL.md's frontmatter `name:` (directory names sometimes differ). Re-enable = delete one line. ⚠️ **Platform updates seed newly-bundled skills as ENABLED** — re-check the list after every update. Also set the background skill **curator off** — no robo-editor should touch a hand-curated set.
 
-## The working set (reference build: 10 enabled)
+## The working set (reference build: 13 enabled)
 
 | Skill | Source | Job |
 |---|---|---|
@@ -25,6 +25,11 @@ Enable/disable = the **`skills.disabled` list in `config.yaml`** + a gateway res
 | telephony | official **(modified — see telephony-mods/)** | Outbound calls (optional) |
 | scrapling | official | Hard-page fallback to the built-in web tools (whose Firecrawl backend is wired in Phase 3 — see [web-research.md](web-research.md)) |
 | maps | bundled | OSM geocode/route — keyless; powers the travel fallback + live "route me from anywhere" asks |
+| docx | bundled (Anthropic, since platform v0.19) | Create/read/edit Word docs & templates — ad-hoc "fix this client doc" asks alongside deliverable-export's md→DOCX lane. Scripts run from their own dir (the `office` module resolves local imports that way) |
+| pdf | bundled (Anthropic, since platform v0.19) | Create/merge/split/**fill forms**/secure PDFs (pypdf + pdfplumber + pdf2image; needs poppler on PATH) |
+| xlsx | bundled (Anthropic, since platform v0.19) | Create/read/edit Excel/CSV — the build's only spreadsheet capability (openpyxl + a formula-recalc script) |
+
+**Doc-trio deps are NOT bundled** — install into the platform venv (`pip install --only-binary :all: openpyxl pdf2image pdfplumber pypdf`), then **`pip check`**: if it flags a Pillow conflict, re-pin to the platform's required version. `brew install poppler` if `pdftoppm` is missing. Smoke-test each before relying on them.
 
 ## The patch ledger (keep one; this is yours pre-filled)
 

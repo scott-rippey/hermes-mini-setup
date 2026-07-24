@@ -36,6 +36,7 @@ Underneath is the official [Nous Research Hermes Agent](https://github.com/NousR
 | Google Workspace | Your own domain, with a second user seat for the agent's identity |
 | Slack | A free workspace is fine |
 | OpenAI API key | Embeddings only (typically well under $5/mo) |
+| Anthropic API key | **Recommended** — provider-outage fallback for the agent (`claude-sonnet-5`, pay-per-use, pennies unless the primary is down); prompted in Phase 3, skippable |
 | GitHub | A free account + one private repo (the agent's docs self-backup — Phase 9, not optional) |
 | Optional | Granola or any MCP meeting-notes provider (meeting pipeline) · Bland.ai (phone calls) · SignWell (proposal/contract e-signature — free at low volume, **strongly recommended**) · Google Routes API (live-traffic ETAs) |
 
@@ -53,4 +54,4 @@ cd hermes-mini-setup
 
 ## Provenance
 
-This is the sanitized, reproducible walkthrough of a real production system (built June–July 2026 on Hermes Agent v0.17.0). Every feature here runs daily on the original box; every gotcha in the appendix was hit for real. Nothing customer- or operator-specific was ever committed to this repo — the personalization phase generates *your* specifics locally.
+This is the sanitized, reproducible walkthrough of a real production system (built June–July 2026 on Hermes Agent v0.17.0, running on v0.19.0 today). Every feature here runs daily on the original box; every gotcha in the appendix was hit for real. Nothing customer- or operator-specific was ever committed to this repo — the personalization phase generates *your* specifics locally.
