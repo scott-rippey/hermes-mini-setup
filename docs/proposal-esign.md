@@ -19,7 +19,7 @@
 | Pending state | `~/.hermes/signwell/pending.json` | Docs awaiting signature; poll self-heals (deleted upstream → dropped) |
 | Poller | launchd `ai.hermes.signwell-poll`, every 15 min, `poll --notify` | No-op when nothing pending; end-of-run marker; digest row ships in the digest template, gated on the skill dir |
 | Signed PDFs | `~/<agent>-outputs/<date>-<doc>-SIGNED.pdf` | Local artifact. SignWell's dashboard keeps the audit trail AND emails the operator the signed copy itself — so the pipeline sends **no email** |
-| Dashboard branding | SignWell Settings → Branding | Logo: use a **300×60 self-backgrounded lockup bar** (icon + wordmark on a dark rounded bar, transparent corners) — theme-proof on light webmail and dark-mode mobile, where a transparent logo fails one or the other. Business-tier feature; may lapse on the PAYG API tier after trial (the PDF's own branding is yours regardless) |
+| Dashboard branding | SignWell Settings → Branding | Logo: use a **300×60 self-backgrounded lockup bar** (icon + wordmark on a dark rounded bar, transparent corners) — theme-proof on light webmail and dark-mode mobile, where a transparent logo fails one or the other. **Web-plan-gated (field-tested 2026-07-24):** the logo banner + email signature on signature-request emails require the **Business** web plan (the trial shows them, then they lapse); the skill's `custom_requester_name`/`custom_requester_email` API fields restore the from-**name** and reply-to on any plan and stamp the requester into the audit file. The actual sending address is always `signwelldocs@signwell.com` — no tier changes that. The PDF's own branding is yours regardless |
 
 ## The flow (two tracks)
 

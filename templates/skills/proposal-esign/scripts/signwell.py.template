@@ -27,6 +27,11 @@ API = "https://www.signwell.com/api/v1"
 STATE = os.path.expanduser("~/.hermes/signwell/pending.json")
 OUTDIR = os.path.expanduser("~/{{AGENT_SLUG}}-outputs")
 HERMES = os.path.expanduser("~/.local/bin/hermes")
+# Requester identity on every send — used by SignWell for all email communications,
+# signing notifications, and the audit file (dashboard branding is Business-gated;
+# these API fields are not).
+REQUESTER_NAME = "{{BUSINESS_NAME}}"
+REQUESTER_EMAIL = "{{OPERATOR_EMAIL}}"
 
 
 def api_key():
@@ -69,6 +74,8 @@ def cmd_send(args):
         "name": doc_name,
         "subject": args.subject,
         "message": args.message,
+        "custom_requester_name": REQUESTER_NAME,
+        "custom_requester_email": REQUESTER_EMAIL,
         "text_tags": True,
         "files": [{"name": os.path.basename(args.pdf), "file_base64": pdf_b64}],
         "recipients": [{"id": "1", "name": args.name, "email": args.email}],
