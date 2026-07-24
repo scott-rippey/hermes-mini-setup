@@ -183,9 +183,11 @@ def synthesize(digest, now, audio_meetings):
         return "", ""
     out = r.stdout or ""
     m = re.search(r"<!--BRIEF-->(.*?)<!--/BRIEF-->", out, re.S)
-    frag = (m.group(1) if m else out).strip()
+    frag = (m.group(1) if m else out.split("<!--AUDIO-->")[0]).strip()
     frag = re.sub(r"```html|```", "", frag).strip()
-    a = re.search(r"<!--AUDIO-->(.*?)<!--/AUDIO-->", out, re.S)
+    # close marker sometimes dropped by the model — fall back to open-marker-to-end
+    a = (re.search(r"<!--AUDIO-->(.*?)<!--/AUDIO-->", out, re.S)
+         or re.search(r"<!--AUDIO-->(.*)", out, re.S))
     script = (a.group(1).strip() if a else "")
     script = re.sub(r"<[^>]+>", "", script).strip()  # belt-and-suspenders: strip stray tags
     # guard: if the brief doesn't look like HTML, treat as failure (fall back)
