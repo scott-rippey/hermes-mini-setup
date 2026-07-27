@@ -127,10 +127,16 @@ def my_status(event):
 
 def kb_context(cp):
     """Resolve a counterpart -> KB facts. Returns a dict (empty-ish if not found)."""
-    rows = pg("SELECT id, name FROM people WHERE lower(email)=lower(:'em') LIMIT 1", em=cp["email"])
+    rows = pg("SELECT id, name FROM people WHERE lower(email)=lower(:'em') "
+              "OR EXISTS (SELECT 1 FROM unnest(coalesce(aliases, ARRAY[]::text[])) a "
+              "WHERE lower(a)=lower(:'em')) LIMIT 1", em=cp["email"])
     if not rows:
         rows = pg("SELECT id, name FROM people WHERE lower(name)=lower(:'nm') "
-                  "OR :'nm' ILIKE '%'||name||'%' LIMIT 1", nm=cp["name"])
+                  "OR EXISTS (SELECT 1 FROM unnest(coalesce(aliases, ARRAY[]::text[])) a "
+                  "WHERE lower(a)=lower(:'nm')) "
+                  "OR :'nm' ILIKE '%'||name||'%' "
+                  "OR EXISTS (SELECT 1 FROM unnest(coalesce(aliases, ARRAY[]::text[])) a "
+                  "WHERE :'nm' ILIKE '%'||a||'%') LIMIT 1", nm=cp["name"])
     if not rows:
         return {"found": False, "name": cp["name"], "email": cp["email"]}
     pid, pname = rows[0][0], rows[0][1]
