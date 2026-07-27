@@ -59,6 +59,7 @@ Update, then re-apply:
 | Call rings straight to voicemail | Recipient's unknown-caller silencing — save the number to Contacts |
 | Travel card says OpenStreetMap instead of Google | The fallback did its job — check `google route unavailable` in the prep log + the Routes key |
 | No travel block at all | By design when the invite lacks a physical address |
+| Fallback 400 "third-party apps now draw from your extra usage" despite a funded key | Claude Code's OAuth login outranks `ANTHROPIC_API_KEY` in the credential ladder — put the same console key in `ANTHROPIC_TOKEN` too ([architecture.md](architecture.md) Models); re-run the force-test |
 | "Gateway shutting down" in Slack | A restart, not a crash — self-heals in seconds |
 | Config edit didn't change behavior | Forgot the restart, or the session predates it (4am fixes) |
 | MCP OAuth won't complete headless | The pty + timeout dance — [meeting-pipeline.md](meeting-pipeline.md) |
