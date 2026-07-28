@@ -75,6 +75,20 @@ def fmt_time(iso):
         return str(iso)
 
 
+def fmt_range(e):
+    """'9:00 AM–5:00 PM', or just the start for all-day/unknown ends."""
+    s, en = fmt_time(e.get("start")), fmt_time(e.get("end"))
+    return f"{s}–{en}" if (en and "all day" not in (s, en)) else s
+
+
+def fmt_attendees(e):
+    """' with Name, Name' — everyone but the operator ('' if none)."""
+    names = [(a.get("displayName") or a.get("email") or "").strip()
+             for a in e.get("attendees") or [] if not a.get("self")]
+    names = [n for n in names if n]
+    return f" with {', '.join(names)}" if names else ""
+
+
 def gather(now):
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     end = start + datetime.timedelta(days=1) - datetime.timedelta(seconds=1)
@@ -118,7 +132,7 @@ def meetings_block():
 def digest_text(now, cal, mail, open_tasks, meeting_titles):
     L = [f"Today is {now.strftime('%A, %B %-d, %Y')}.", ""]
     L.append("CALENDAR (today):")
-    L += [f"- {fmt_time(e.get('start'))} {e.get('summary') or '(untitled)'}"
+    L += [f"- {fmt_range(e)} {e.get('summary') or '(untitled)'}{fmt_attendees(e)}"
           + (f" @ {e.get('location')}" if e.get("location") else "") for e in cal] or ["- (nothing scheduled)"]
     L.append("")
     L.append("UNREAD EMAIL (last 3 days):")
@@ -159,7 +173,9 @@ def synthesize(digest, now, audio_meetings):
         "SYNTHESIZE — do not relist the items. In 2-4 tight sentences say what today is really about: the single "
         "most important thing, how the calendar/email/tasks connect, any deadline or risk, and what to prep. Then a "
         "short 'Today's focus' list of 2-4 concrete priorities, most important first. Be specific and reference real "
-        "items; never invent anything not in the DATA. Sharp and useful — no greeting, no filler, no sign-off.\n\n"
+        "items; never invent anything not in the DATA. Connect items to each other only when the DATA itself links "
+        "them — never infer a relationship from similar names or titles. Sharp and useful — no greeting, no filler, "
+        "no sign-off.\n\n"
         "Output ONLY an HTML fragment wrapped EXACTLY between <!--BRIEF--> and <!--/BRIEF--> — no <html>/<body>, no "
         "markdown, no code fences. Use only <p>, <strong>, <ul>, <li>. Do NOT use any tools; write from the DATA only.\n\n"
         "THEN a SECOND, SEPARATE fragment wrapped EXACTLY between <!--AUDIO--> and <!--/AUDIO-->: a spoken "
@@ -227,7 +243,8 @@ def details_block(cal, mail, open_tasks):
     def row(inner):
         return f'<div style="font:13px {FONT};color:{INK};margin:3px 0">{inner}</div>'
 
-    cal_rows = "".join(row(f'<b>{esc(fmt_time(e.get("start")))}</b> &nbsp; {esc(e.get("summary") or "(untitled)")}'
+    cal_rows = "".join(row(f'<b>{esc(fmt_range(e))}</b> &nbsp; {esc(e.get("summary") or "(untitled)")}'
+                           f'<span style="color:{MUTED}">{esc(fmt_attendees(e))}</span>'
                            + (f' <span style="color:{FAINT}">· {esc(e.get("location"))}</span>' if e.get("location") else ""))
                        for e in cal) or row(f'<span style="color:{FAINT}">Nothing scheduled.</span>')
     mail_rows = "".join(row(f'<b>{esc((m.get("from") or "?").split("<")[0].strip()[:34])}</b> &mdash; '
