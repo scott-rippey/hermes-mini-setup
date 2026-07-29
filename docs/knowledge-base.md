@@ -12,7 +12,7 @@
 
 ## The identity model (no-drift by construction)
 
-- **`customers`** — canonical companies, plus two non-company identities: the **operator's own slug** (their "me" bucket — also the silent default for unscoped stores) and **`general`** (non-customer research). Aliases resolve to canonical slugs; contacts are **never** company aliases.
+- **`customers`** — canonical companies, plus non-company identities: the **operator's own slug** (their "me" bucket — also the silent default for unscoped stores), **`general`** (non-customer research), and **community identities** (`metadata.kind = "community"`) — recurring groups the operator belongs to (dev groups, masterminds) whose meetings/knowledge file under the group itself, one identity per group (`add_customer` takes an optional `kind`; `customers` returns it so the agent can tell communities from paying customers). Aliases resolve to canonical slugs; contacts are **never** company aliases.
 - **`people`** — first-class contacts, linked to companies **many-to-many** with a per-company role. One person can span businesses — e.g., Jamie is "Owner" at Acme Gym *and* "Partner" at Acme Parking; `add_person` finds-or-links, never duplicates.
 - **`apps`** — first-class software records, each owned by exactly ONE company, optionally carrying a GitHub `owner/name` (feeds the docs-sync).
 - **`meetings`** — one row per real meeting (unique meeting-id dedupe), linked to customer/person and the searchable meeting doc.

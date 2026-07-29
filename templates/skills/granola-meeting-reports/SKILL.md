@@ -53,7 +53,9 @@ File with `mcp_rag add_meeting` — stores the searchable markdown AND upserts t
 Resolve the counterpart against people cards (the resolver matches name / alias / email, companies primary-first):
 - **Name matches -> one company:** `add_meeting` with `counterpart` only. Silent.
 - **Name matches -> multiple companies** (a person linked to several companies): `add_meeting` with just `counterpart` — auto-files under the **primary** company (shown as "Filed under" in the report so a rare miss is catchable). Silent.
-- **No match** (new/unknown name), or **no `w/ Name`**: do NOT file. **Escalate to Slack** (below); leave pending until {{OPERATOR_FIRST_NAME}} assigns.
+- **No match** (new/unknown name), or **no `w/ Name`**: check the **community rule** below first; if it doesn't apply, do NOT file. **Escalate to Slack** (below); leave pending until {{OPERATOR_FIRST_NAME}} assigns.
+
+**Community rule — recurring group meetings (dev groups, masterminds, etc.):** some identities in `customers` are communities, not customers (`metadata.kind = "community"`). If a meeting has no resolvable counterpart, match the meeting TITLE against customer names/aliases (`mcp_rag customers`): exactly one community identity matches → `add_meeting` with `customer=<slug>` and NO counterpart. Silent. Ambiguous or zero matches → escalate as usual. Never file a real client meeting this way — this path is only for group/community calls where the group IS the identity.
 
 ## Escalation (Slack #general)
 When the counterpart can't be resolved, post with `hermes send -t slack:#general "<message>"`:

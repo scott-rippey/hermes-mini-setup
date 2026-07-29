@@ -505,29 +505,30 @@ def get(document_id: str) -> dict:
 
 @mcp.tool()
 def customers() -> list[dict]:
-    """List the customers / identities in the knowledge base — the canonical registry. Returns slug, name, aliases, and document count for each. Call this to find the right existing customer before storing or searching, so you reuse a canonical identity instead of creating a duplicate."""
+    """List the customers / identities in the knowledge base — the canonical registry. Returns slug, name, aliases, kind (an identity may be tagged, e.g. 'community' for recurring group meetings — not a paying customer), and document count for each. Call this to find the right existing customer before storing or searching, so you reuse a canonical identity instead of creating a duplicate."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT c.slug, c.name, c.aliases,
+            SELECT c.slug, c.name, c.aliases, c.metadata->>'kind' AS kind,
                    (SELECT count(*) FROM document_customers dc WHERE dc.customer_id = c.id) AS docs
             FROM customers c ORDER BY c.name
             """
         )
         rows = cur.fetchall()
-    return [{"slug": r[0], "name": r[1], "aliases": list(r[2] or []), "documents": r[3]} for r in rows]
+    return [{"slug": r[0], "name": r[1], "aliases": list(r[2] or []), "kind": r[3], "documents": r[4]} for r in rows]
 
 
 @mcp.tool()
-def add_customer(name: str, aliases: list[str] | None = None) -> dict:
-    """Register a NEW customer / identity in the knowledge base. Use only when it is genuinely new — call `customers` first to avoid duplicates. `aliases` are alternate names that should resolve to this same record (e.g. ["Acme", "Acme Corporation"])."""
+def add_customer(name: str, aliases: list[str] | None = None, kind: str | None = None) -> dict:
+    """Register a NEW customer / identity in the knowledge base. Use only when it is genuinely new — call `customers` first to avoid duplicates. `aliases` are alternate names that should resolve to this same record (e.g. ["Acme", "Acme Corporation"]). `kind` tags a non-customer identity — pass "community" for a recurring group (dev group, mastermind) whose meetings file under the group itself; omit for real customers."""
     with _connect() as conn, conn.cursor() as cur:
         existing = _resolve_customer(name, cur)
         if existing:
             return {"slug": existing["slug"], "name": existing["name"], "created": False, "note": "already exists"}
         cur.execute(
-            "INSERT INTO customers (slug, name, aliases) VALUES (%s, %s, %s) RETURNING slug, name",
-            (_slugify(name), name.strip(), aliases or []),
+            "INSERT INTO customers (slug, name, aliases, metadata) VALUES (%s, %s, %s, %s) RETURNING slug, name",
+            (_slugify(name), name.strip(), aliases or [],
+             Json({"kind": kind} if kind else {})),
         )
         r = cur.fetchone()
     return {"slug": r[0], "name": r[1], "created": True}
