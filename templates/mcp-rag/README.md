@@ -8,10 +8,12 @@ The custom MCP server that gives the agent its knowledge-base hands: `mcp_rag_st
 mkdir -p ~/.hermes/mcp-rag && cd ~/.hermes/mcp-rag
 # instantiate server.py from server.py.template (fill {{PLACEHOLDERS}}, verify none remain)
 python3 -m venv .venv
-.venv/bin/pip install "mcp>=1.28" "openai>=2" "psycopg[binary]>=3.3" "pgvector>=0.4" tiktoken
+.venv/bin/pip install "mcp>=1.28,<2" "openai>=2" "psycopg[binary]>=3.3" "pgvector>=0.4" tiktoken
 ```
 
 Reference versions from the production build (2026-07): mcp 1.28.1 · openai 2.44.0 · psycopg 3.3.4 · pgvector 0.4.2.
+
+**The `<2` bound on mcp is load-bearing.** mcp 2.0 (stable 2026-07-28, alongside the new MCP spec of the same date) removes `mcp.server.fastmcp` — `server.py` is written against the v1 `FastMCP` API and dies on import under 2.x. The wire protocol stays interoperable, so there's no pressure to move; upgrading is a deliberate future project (FastMCP → `McpServer` rewrite), worth it only once the Hermes client side speaks the new spec.
 
 ## Environment
 
