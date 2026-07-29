@@ -15,6 +15,10 @@ Reference versions from the production build (2026-07): mcp 1.28.1 · openai 2.4
 
 **The `<2` bound on mcp is load-bearing.** mcp 2.0 (stable 2026-07-28, alongside the new MCP spec of the same date) removes `mcp.server.fastmcp` — `server.py` is written against the v1 `FastMCP` API and dies on import under 2.x. The wire protocol stays interoperable, so there's no pressure to move; upgrading is a deliberate future project (FastMCP → `McpServer` rewrite), worth it only once the Hermes client side speaks the new spec.
 
+## Updating an existing install
+
+When this repo's `server.py.template` changes (new tool parameters, resolution logic, etc.), an already-running box picks it up by **re-applying, not re-installing**: `git pull`, diff the new template against your live `~/.hermes/mcp-rag/server.py` (the only expected divergences are your `{{PLACEHOLDER}}` substitutions — if you see local changes you don't recognize, stop and audit before touching anything), apply the template's changes preserving your local values, `py_compile`, then restart the gateway so the MCP server reloads. Skill templates (e.g. the granola meeting skill's SKILL.md) follow the same diff-and-apply pattern but need no restart — skill edits are live on the next invocation. The venv and database are untouched unless a migration ships in `sql/migrations/`.
+
 ## Environment
 
 | Var | Meaning | Default in template |
