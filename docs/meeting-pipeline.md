@@ -6,11 +6,11 @@
 
 Wire your notes tool as an MCP server if it offers one. OAuth gotcha worth knowing: gateways can't do interactive OAuth, and some MCP login flows need a real TTY with tight timeouts — a `pty` wrapper (and temporarily bumping the connect timeout) gets the token cached; it's smooth after that.
 
-## Nightly reports (10:00p)
+## Nightly reports (10:00p + 7:00a catch-up sweep)
 
-A skill run headlessly each night:
+A skill run headlessly each night — with a second fire time in the same launchd plist (`StartCalendarInterval` as an array): the 7am sweep is a no-op most mornings (`processed.json` dedupes) but catches notes that appeared in the provider's list after the 10pm poll, landing them in that same morning's brief instead of a day late (seen in the field: a day-long session's note listed a day after a shorter same-day meeting's):
 
-1. Pull recent meetings; dedupe via a local `processed.json`.
+1. Pull recent meetings — **logging the raw list first** (every id + title + date returned, before any filtering: the audit trail distinguishing "the provider didn't list it yet" from "the run overlooked it"); dedupe via a local `processed.json`.
 2. Author each report; render **Markdown + email-safe HTML** (inline delivery beats attachments).
 3. **Resolve who it was:** counterpart name → person → company (a multi-company person resolves to their primary). No resolvable counterpart → the **community rule** first: match the meeting title against customer names/aliases; exactly one `kind: community` identity hit (a recurring group call) → file under the group, no counterpart, silent. Otherwise unmatched → a Slack prompt asking the operator to assign it — never guess. Other actual **participants** (a "w/ A & B" title, named attendees) that resolve to existing person cards pass as `people=` so the note links to — and is searchable under — every attendee; participants only, never merely-mentioned names, and unresolved extras don't escalate.
 4. **File it** via `add_meeting` — a sanctioned deterministic write: the structured `meetings` row (unique meeting-id dedupe, FKs to customer/person) + the searchable KB doc.

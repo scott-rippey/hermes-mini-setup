@@ -14,8 +14,15 @@
     ops-digest         8    10      deterministic all-systems health report
     github-docs-sync  21     0      customer app docs -> KB (if selected)
     meeting-reports   22     0      meeting-notes pipeline (if selected)
+                     + 7     0      second catch-up sweep, same plist (see below)
   meeting-prep uses StartInterval 900 (every 15 min) INSTEAD of
   StartCalendarInterval — swap the block per the comment below.
+  meeting-reports gets TWO fire times in ONE plist — make StartCalendarInterval
+  an <array> of two Hour/Minute dicts (22:0 and 7:0). The 7am sweep is a no-op
+  most mornings (processed.json dedupes) but catches notes that appeared in the
+  provider's list after the 10pm poll (seen in the field: a day-long session's
+  note listed a day late), landing them in that SAME morning's 8am brief instead
+  of a day later.
   meeting-reports runs the AGENT, not a python script — its ProgramArguments are
   /bin/bash + ~/.hermes/scripts/run_with_marker.sh + "meeting-reports" + the
   hermes command (templates/skills/README.md step 5). The marker line the wrapper

@@ -32,7 +32,7 @@ Trigger when {{OPERATOR_FIRST_NAME}} says "process my latest Granola meeting", "
 - **Output folder:** `~/{{AGENT_SLUG}}-outputs/granola-reports/{markdown,html}/`.
 
 ## Run loop (per meeting)
-1. **Select.** Default to the most recent unprocessed meeting via `mcp_granola_list_meetings` (the cron passes a since-window). **SKIP** any title containing "livestream". Skip meeting IDs already in `state/processed.json`.
+1. **Select.** Default to the most recent unprocessed meeting via `mcp_granola_list_meetings` (the cron passes a since-window). **Inventory first — never skip this:** before any dedupe or filtering, state in the run report the RAW list Granola returned — every meeting's id, title, and date (`seen: <id> | <title> | <date>`, one line each; `seen: (none)` if empty). This is the audit trail for "Granola didn't list it yet" vs "the run overlooked it" — a late-appearing note is invisible in every other artifact. Then: **SKIP** any title containing "livestream". Skip meeting IDs already in `state/processed.json`.
 2. **Pull both** `get_meetings` (summary) and `get_meeting_transcript` (full). If the transcript is too large for context, offload to a subagent per AUTHORING.md ("Large transcripts").
 3. **Author** the report as a **content JSON** (the structure in `samples/sample-meeting.json`) per AUTHORING.md (template, voice, accuracy, glossary). Counterpart = the `w/ <Name>` in the title. Base name = `YYYY-MM-DD - <sanitized title>` (`w/` -> `w`).
 4. **Render.** `node render.js <content.json>` -> `markdown/<base>.md` + `html/<base>.html`.
