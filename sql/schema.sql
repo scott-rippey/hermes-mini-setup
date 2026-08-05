@@ -90,6 +90,7 @@ CREATE TABLE public.apps (
     name text NOT NULL,
     slug text NOT NULL,
     repo text,
+    aliases text[] DEFAULT '{}'::text[] NOT NULL,
     metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL

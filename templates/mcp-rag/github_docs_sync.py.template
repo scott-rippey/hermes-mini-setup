@@ -18,6 +18,7 @@ Usage:
 """
 import base64
 import json
+import os
 import subprocess
 import sys
 import time
@@ -30,6 +31,13 @@ GH_API = "https://api.github.com"
 API_VERSION = "2022-11-28"
 DOC_ROOT_FILES = {"CLAUDE.md"}
 DOC_PREFIXES = ("docs/",)
+# Binary assets that sometimes live under docs/ (design refs, exports) — never
+# embeddable text; decoding them produces replacement-char soup that can blow
+# the embeddings API's per-request token cap.
+BINARY_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".pdf",
+               ".zip", ".gz", ".tar", ".mp3", ".mp4", ".mov", ".wav", ".m4a",
+               ".woff", ".woff2", ".ttf", ".otf", ".eot", ".psd"}
+MAX_DOC_BYTES = 400_000  # guard for giant text files (embed cap ~300K tokens/request)
 
 
 def _keychain_pat(owner: str) -> str | None:
@@ -56,6 +64,8 @@ def _gh(url: str, token: str) -> dict:
 
 
 def _is_doc(path: str) -> bool:
+    if os.path.splitext(path)[1].lower() in BINARY_EXTS:
+        return False
     return path in DOC_ROOT_FILES or any(path.startswith(p) for p in DOC_PREFIXES)
 
 
@@ -92,16 +102,22 @@ def sync_app(app: dict) -> dict:
         title = f"{app['name']} — {path}"
         if f.get("size", 0) == 0:   # empty file: nothing to embed. Not added to current_titles,
             continue                # so if it had content before and was emptied, it gets pruned below.
+        if f.get("size", 0) > MAX_DOC_BYTES:
+            print(f"[{app['slug']}] SKIP {path} — {f['size']:,} bytes exceeds {MAX_DOC_BYTES:,} cap")
+            continue
         current_titles.add(title)
         if existing.get(title) == sha:
             skipped += 1
             continue
-        blob = _gh(f"{GH_API}/repos/{repo}/git/blobs/{sha}", token)  # base64 content by SHA
-        content = base64.b64decode(blob["content"]).decode("utf-8", "replace")
-        if not content.strip():     # whitespace-only safety net
-            continue
-        res = server._store(content, title, app=app["slug"],
-                            metadata={"source": "github", "repo": repo, "branch": branch, "path": path, "sha": sha})
+        try:
+            blob = _gh(f"{GH_API}/repos/{repo}/git/blobs/{sha}", token)  # base64 content by SHA
+            content = base64.b64decode(blob["content"]).decode("utf-8", "replace")
+            if not content.strip():     # whitespace-only safety net
+                continue
+            res = server._store(content, title, app=app["slug"],
+                                metadata={"source": "github", "repo": repo, "branch": branch, "path": path, "sha": sha})
+        except Exception as e:  # one bad file must not kill the app's whole sync
+            res = {"error": f"{type(e).__name__}: {e}"}
         if res.get("error"):
             store_errors += 1
             print(f"[{app['slug']}] ERROR storing {path}: {res['error']}")

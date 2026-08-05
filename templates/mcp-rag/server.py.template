@@ -174,9 +174,10 @@ def _resolve_app(name, cur):
         SELECT a.id, a.slug, a.name, a.customer_id, c.slug, c.name
         FROM apps a JOIN customers c ON c.id = a.customer_id
         WHERE lower(a.slug) = %s OR lower(a.name) = %s OR lower(coalesce(a.repo, '')) = %s
+           OR EXISTS (SELECT 1 FROM unnest(a.aliases) al WHERE lower(al) = %s)
         LIMIT 1
         """,
-        (needle, needle, needle),
+        (needle, needle, needle, needle),
     )
     row = cur.fetchone()
     if not row:
@@ -617,13 +618,13 @@ def add_person(name: str, customer: str, email: str | None = None,
 
 @mcp.tool()
 def apps(customer: str | None = None) -> list[dict]:
-    """List apps / products / projects in the knowledge base, optionally scoped to one customer (business). Each app belongs to exactly one business. Returns each app's slug, name, GitHub repo, owning customer, and document count. Call this to find the right app before storing or searching under it."""
+    """List apps / products / projects in the knowledge base, optionally scoped to one customer (business). Each app belongs to exactly one business. Returns each app's slug, name, aliases, GitHub repo, owning customer, and document count. Call this to find the right app before storing or searching under it."""
     with _connect() as conn, conn.cursor() as cur:
         cust = _resolve_customer(customer, cur) if customer else None
         cust_id = cust["id"] if cust else None
         cur.execute(
             """
-            SELECT a.slug, a.name, a.repo,
+            SELECT a.slug, a.name, a.aliases, a.repo,
                    (SELECT slug FROM customers c WHERE c.id = a.customer_id) AS customer,
                    (SELECT count(*) FROM memory_documents d WHERE d.app_id = a.id) AS docs
             FROM apps a
@@ -633,12 +634,12 @@ def apps(customer: str | None = None) -> list[dict]:
             (cust_id, cust_id),
         )
         rows = cur.fetchall()
-    return [{"slug": r[0], "name": r[1], "repo": r[2], "customer": r[3], "documents": r[4]} for r in rows]
+    return [{"slug": r[0], "name": r[1], "aliases": list(r[2] or []), "repo": r[3], "customer": r[4], "documents": r[5]} for r in rows]
 
 
 @mcp.tool()
-def add_app(name: str, customer: str, repo: str | None = None) -> dict:
-    """Register an APP / product / project, owned by exactly ONE customer (business). E.g. add_app("Acme Portal", "Acme Corp", "acme-org/portal"). `repo` is the GitHub "owner/name" its documentation syncs from. The customer must already exist (call `customers` / `add_customer`). Call `apps` first to avoid duplicates; re-adding an existing app updates its repo."""
+def add_app(name: str, customer: str, repo: str | None = None, aliases: list[str] | None = None) -> dict:
+    """Register an APP / product / project, owned by exactly ONE customer (business). E.g. add_app("Acme Portal", "Acme Corp", "acme-org/portal"). `repo` is the GitHub "owner/name" its documentation syncs from. `aliases` are alternate names that resolve to this app (working titles, codenames) — on an existing app they MERGE into the current set and are never removed (no removal tool exists; alias pruning is a manual operator action — say so instead of attempting it). The customer must already exist (call `customers` / `add_customer`). Call `apps` first to avoid duplicates; re-adding an existing app updates its repo and merges aliases."""
     with _connect() as conn, conn.cursor() as cur:
         comp = _resolve_customer(customer, cur)
         if not comp:
@@ -647,14 +648,21 @@ def add_app(name: str, customer: str, repo: str | None = None) -> dict:
         if existing:
             if repo:
                 cur.execute("UPDATE apps SET repo = %s, updated_at = now() WHERE id = %s", (repo, existing["id"]))
+            if aliases:
+                cur.execute(
+                    "UPDATE apps SET aliases = (SELECT array_agg(DISTINCT x) FROM unnest(aliases || %s) x), "
+                    "updated_at = now() WHERE id = %s",
+                    (aliases, existing["id"]),
+                )
             return {"slug": existing["slug"], "name": existing["name"], "customer": comp["slug"],
                     "repo": repo, "created": False, "note": "already exists"}
         cur.execute(
-            "INSERT INTO apps (customer_id, slug, name, repo) VALUES (%s, %s, %s, %s) RETURNING slug, name",
-            (comp["id"], _slugify(name), name.strip(), repo),
+            "INSERT INTO apps (customer_id, slug, name, repo, aliases) VALUES (%s, %s, %s, %s, %s) RETURNING slug, name",
+            (comp["id"], _slugify(name), name.strip(), repo, aliases or []),
         )
         r = cur.fetchone()
-    return {"slug": r[0], "name": r[1], "customer": comp["slug"], "repo": repo, "created": True}
+    return {"slug": r[0], "name": r[1], "customer": comp["slug"], "repo": repo,
+            "aliases": aliases or [], "created": True}
 
 
 if __name__ == "__main__":
