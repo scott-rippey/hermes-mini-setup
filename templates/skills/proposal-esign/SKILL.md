@@ -83,6 +83,8 @@ python "${HERMES_HOME:-$HOME/.hermes}/skills/productivity/proposal-esign/scripts
 
 Omit `--live` for a test-mode rehearsal (creates the document, sends nothing, bills nothing — the recipient address still receives a banner-wrapped PREVIEW email, useful for checking branding). The send is recorded in `~/.hermes/signwell/pending.json` for tracking.
 
+**Persist the source at render time:** save the final drafting Markdown next to the rendered PDF in `~/{{AGENT_SLUG}}-outputs/` with the same basename (`<name>.md` beside `<name>.pdf`). The signature can land days later — after session resets and scratch cleanup — and the KB filing REQUIRES that Markdown (PDF-back-conversion is forbidden). If it's missing at filing time anyway, recover it from chat/email history or ask the operator — never reconstruct from the PDF.
+
 ### 3. Track / collect
 
 ```bash
@@ -91,13 +93,14 @@ python .../signwell.py status --id <doc_id>   # one doc
 ```
 
 A **15-min launchd poller** (`ai.hermes.signwell-poll`, runs `poll --notify`) watches pending docs in the background: on a signed doc it downloads the PDF to `~/{{AGENT_SLUG}}-outputs/<date>-<doc>-SIGNED.pdf` and posts a file-ask (with an @-mention) to the proposals channel — the target comes from `SIGNWELL_NOTIFY_CHANNEL` in `.env` (set it to the channel ID: rename-proof). **No email is sent — SignWell itself emails the operator the signed copy.** When a signature lands (via the cron's Slack post, or `"result": "signed"` from your own poll):
-1. **Offer** to file the document into the KB under the customer — offer-then-file, never auto-store. The filed content is the **drafting Markdown** (never a PDF-back-conversion; no signature tags or SignWell audit artifacts), prepended with a header noting the SignWell document ID and signed-PDF path. Set these metadata keys on EVERY signed filing — no ad-hoc subsets: `document_type` (`proposal`/`contract`), `signed: true`, `signed_date` (from the SignWell document's completion timestamp — `status --id` prints every timestamp the API returns under `timestamps`/recipients; NOT the day you collected the PDF), `signer_name`, `signer_email`, `signwell_document_id`, `signed_pdf_path`. Deal facts (`fee`, `project`, …) as useful; `test: true` on rehearsal artifacts.
+1. **Offer** to file the document into the KB under the customer — offer-then-file, never auto-store. The filed content is the **drafting Markdown** (never a PDF-back-conversion; no signature tags or SignWell audit artifacts), prepended with a header noting the SignWell document ID and signed-PDF path. Set these metadata keys on EVERY signed filing — no ad-hoc subsets: `document_type` (`proposal`/`contract`), `signed: true`, `signed_date` (from the SignWell document's completion timestamp — `status --id` prints every timestamp the API returns under `timestamps`/recipients; the API has NO `completed_at`, so for a `Completed` doc `updated_at` IS the completion timestamp; NOT the day you collected the PDF), `signer_name`, `signer_email`, `signwell_document_id` (the API UUID from the send record / poller entry / `status` call — NEVER parsed off the PDF: test-mode PDFs carry a watermark where the ID would be, and recovery depends on this UUID being real), `signed_pdf_path`. Deal facts (`fee`, `project`, …) as useful; `test: true` on rehearsal artifacts.
 2. Offer to draft the project kickoff for approval.
 
 `Declined` / `Expired`: the cron posts it to the same channel; no automatic follow-up.
 
 ## Notes
 - Signed docs also remain in the operator's SignWell dashboard (full audit trail) — the API and GUI are the same account.
+- **Missing local signed PDF at filing time** (deleted, box restored): re-download by document ID first — the completed-PDF endpoint serves it any time, and the dashboard holds it too. Escalate to the operator only if the API can't produce it.
 - SignWell dashboard branding (Account Settings → Branding): upload a logo — a **300×60 self-backgrounded lockup bar** (icon + wordmark on a dark rounded bar, transparent corners) stays legible on BOTH light webmail and dark-mode mobile, where a transparent logo fails one or the other.
 - The completed-PDF endpoint can 400 for a few seconds right after signing; `poll` just retries on its next run.
 - Interactive polls omit `--notify` (you're already talking to the operator — the Slack post would duplicate you).
