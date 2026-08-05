@@ -105,8 +105,15 @@ def cmd_status(args):
     print(json.dumps({
         "id": doc.get("id"), "name": doc.get("name"), "status": doc.get("status"),
         "test_mode": doc.get("test_mode"),
+        # every timestamp SignWell returns (created/updated/completed…) — the
+        # KB filing's signed_date comes from here, not the collection day
+        "timestamps": {k: v for k, v in doc.items()
+                       if isinstance(k, str) and k.endswith(("_at", "_time"))},
         "recipients": [{"name": r.get("name"), "email": r.get("email"),
-                        "status": r.get("status")} for r in doc.get("recipients", [])],
+                        "status": r.get("status"),
+                        **{k: v for k, v in r.items()
+                           if isinstance(k, str) and k.endswith(("_at", "_time"))}}
+                       for r in doc.get("recipients", [])],
     }, indent=2))
 
 

@@ -91,7 +91,7 @@ python .../signwell.py status --id <doc_id>   # one doc
 ```
 
 A **15-min launchd poller** (`ai.hermes.signwell-poll`, runs `poll --notify`) watches pending docs in the background: on a signed doc it downloads the PDF to `~/{{AGENT_SLUG}}-outputs/<date>-<doc>-SIGNED.pdf` and posts a file-ask (with an @-mention) to the proposals channel — the target comes from `SIGNWELL_NOTIFY_CHANNEL` in `.env` (set it to the channel ID: rename-proof). **No email is sent — SignWell itself emails the operator the signed copy.** When a signature lands (via the cron's Slack post, or `"result": "signed"` from your own poll):
-1. **Offer** to file the proposal (markdown + signed date + SignWell doc id + signer) into the KB under the customer — offer-then-file, never auto-store.
+1. **Offer** to file the document into the KB under the customer — offer-then-file, never auto-store. The filed content is the **drafting Markdown** (never a PDF-back-conversion; no signature tags or SignWell audit artifacts), prepended with a header noting the SignWell document ID and signed-PDF path. Set these metadata keys on EVERY signed filing — no ad-hoc subsets: `document_type` (`proposal`/`contract`), `signed: true`, `signed_date` (from the SignWell document's completion timestamp — `status --id` prints every timestamp the API returns under `timestamps`/recipients; NOT the day you collected the PDF), `signer_name`, `signer_email`, `signwell_document_id`, `signed_pdf_path`. Deal facts (`fee`, `project`, …) as useful; `test: true` on rehearsal artifacts.
 2. Offer to draft the project kickoff for approval.
 
 `Declined` / `Expired`: the cron posts it to the same channel; no automatic follow-up.
