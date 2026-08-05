@@ -1,0 +1,58 @@
+# TEMPLATE — no placeholders needed (identity-free). Save to ~/.hermes/scripts/,
+# smoke-test by hand, THEN schedule via templates/launchd/ (StartInterval 300).
+
+#!/usr/bin/env python3
+"""Pending-writes watcher — surface staged approval-queue items the moment they land.
+
+Scans ~/.hermes/pending/*/ for staged write JSONs (skills, memory, any future
+subsystem), diffs against the seen-state file, and pings #system-messages via
+system_notify.sh for anything NEW — so a staged write is never silent (staged
+items otherwise sit invisible: background_review stages outside any conversation,
+and interactive stages get one mention with no follow-up). Deterministic, no AI.
+Scheduled q5m via launchd `ai.hermes.pending-watch`. The 8:10 ops digest reports
+the standing pending count independently — this script is only the immediate ping.
+"""
+import json
+import subprocess
+from pathlib import Path
+
+PENDING = Path.home() / ".hermes/pending"
+STATE = PENDING / ".watch-seen.json"
+NOTIFY = str(Path.home() / ".hermes/scripts/system_notify.sh")
+
+
+def main():
+    if not PENDING.is_dir():
+        return
+    try:
+        seen = set(json.loads(STATE.read_text()))
+    except Exception:
+        seen = set()
+
+    current, new = set(), []
+    for f in sorted(PENDING.glob("*/*.json")):
+        key = f"{f.parent.name}/{f.name}"
+        current.add(key)
+        if key in seen:
+            continue
+        try:
+            d = json.loads(f.read_text())
+            summary = d.get("summary") or d.get("action") or "(no summary)"
+            origin = d.get("origin") or "?"
+        except Exception:
+            summary, origin = "(unreadable)", "?"
+        new.append(f"{f.parent.name}: {summary} [{origin}]")
+
+    if new:
+        lines = "\n".join(f"• {n}" for n in new[:10])
+        more = f"\n(+{len(new) - 10} more)" if len(new) > 10 else ""
+        msg = (f":inbox_tray: *Staged write{'s' if len(new) != 1 else ''} awaiting approval* "
+               f"({len(current)} pending total)\n{lines}{more}\n"
+               f"Review: `/skills pending` (or the matching subsystem's queue).")
+        subprocess.run(["/bin/bash", NOTIFY, msg], timeout=60)
+
+    STATE.write_text(json.dumps(sorted(current)))
+
+
+if __name__ == "__main__":
+    main()

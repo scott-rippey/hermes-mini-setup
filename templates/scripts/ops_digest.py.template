@@ -459,6 +459,30 @@ def memory_health():
     return rows
 
 
+# ----------------------------------------------------------------------------- pending approvals
+
+def pending_approvals():
+    """Staged writes sitting in the approval queue (~/.hermes/pending/*/).
+    Informational: no age-based FAIL — the q5m pending-watch job pings the ops
+    channel the moment one lands; this row is the standing state so the queue
+    can never silently accumulate."""
+    rows = []
+    pending = HOME / ".hermes" / "pending"
+    if not pending.is_dir():
+        return rows
+    now = datetime.datetime.now().timestamp()
+    for f in sorted(pending.glob("*/*.json")):
+        try:
+            d = json.loads(f.read_text())
+            summary = d.get("summary") or d.get("action") or "(no summary)"
+            origin = d.get("origin") or "?"
+        except Exception:
+            summary, origin = "(unreadable)", "?"
+        age_d = int((now - f.stat().st_mtime) // 86400)
+        rows.append((f.parent.name, summary, origin, age_d))
+    return rows
+
+
 # ----------------------------------------------------------------------------- voice balance
 
 def bland_balance():
@@ -519,7 +543,7 @@ def section(title):
 
 
 def render(date_str, cron, sync_totals, total, by_source, by_model, kb, backup,
-           memrows, bland, syschanges):
+           memrows, bland, syschanges, pendrows=()):
     any_fail = (any(r[2] == "fail" for r in cron)
                 or any(s == "fail" for _, s, _ in memrows))
     status_word = "attention needed" if any_fail else "all green"
@@ -643,6 +667,20 @@ def render(date_str, cron, sync_totals, total, by_source, by_model, kb, backup,
             f'<td style="padding:7px 0;color:{MUTED}">{html.escape(detail)}</td></tr>')
     H.append('</table>')
 
+    # Staged writes awaiting approval (only rendered when something is pending)
+    if pendrows:
+        H.append(section("Staged writes awaiting approval"))
+        H.append(f'<table style="width:100%;border-collapse:collapse;font-size:13px">')
+        for subsystem, summary, origin, age_d in pendrows:
+            age = f"{age_d}d" if age_d else "today"
+            H.append(
+                f'<tr style="border-bottom:1px solid {LINE}">'
+                f'<td style="padding:7px 8px 7px 0;font:600 12px {MONO};white-space:nowrap">{html.escape(subsystem)}</td>'
+                f'<td style="padding:7px 8px 7px 0;color:{MUTED}">{html.escape(summary[:90])}</td>'
+                f'<td style="padding:7px 0;color:{FAINT};white-space:nowrap">{html.escape(origin)} · {age}</td></tr>')
+        H.append('</table>')
+        H.append(f'<div style="font-size:12px;color:{FAINT};margin-top:4px">Review with /skills pending (or the matching subsystem queue).</div>')
+
     # Voice (Bland) balance
     if bland is not None:
         H.append(section("Voice (Bland)"))
@@ -678,8 +716,9 @@ def main(dry_run=False):
     memrows = memory_health()
     bland = bland_balance()
     syschanges = system_changes()
+    pendrows = pending_approvals()
     body = render(date_str, cron, sync_totals, total, by_source, by_model, kb, backup,
-                  memrows, bland, syschanges)
+                  memrows, bland, syschanges, pendrows)
 
     any_fail = (any(r[2] == "fail" for r in cron)
                 or any(s == "fail" for _, s, _ in memrows))

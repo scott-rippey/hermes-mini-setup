@@ -17,6 +17,8 @@
                      + 7     0      second catch-up sweep, same plist (see below)
   meeting-prep uses StartInterval 900 (every 15 min) INSTEAD of
   StartCalendarInterval — swap the block per the comment below.
+  pending-watch uses StartInterval 300 (every 5 min, same swap) — surfaces
+  staged approval-queue writes to the ops channel the moment they land.
   meeting-reports gets TWO fire times in ONE plist — make StartCalendarInterval
   an <array> of two Hour/Minute dicts (22:0 and 7:0). The 7am sweep is a no-op
   most mornings (processed.json dedupes) but catches notes that appeared in the

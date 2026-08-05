@@ -25,6 +25,7 @@ Deterministic (no LLM) except ONE clearly-labeled section. Subject flips to ⚠�
 | Backup | Last bundle name/size/age |
 | **System changes** | The 3:05 ledger snapshot's diffstat + the **AI narrative** — the one synthesized section, hard-grounded (statements must be diff-evidenced; unsure ⇒ omit) with the raw diffstat always rendered beneath as checkable truth |
 | **Memory stores** | A daily mirror of the memory tool's drift check (format round-trip + budgets + refused-write detection) — run from *outside* the agent |
+| **Staged writes awaiting approval** | Only rendered when `~/.hermes/pending/*/` is non-empty: each staged item's subsystem, summary, origin, age. Informational — the q5m `pending-watch` job already pinged the ops channel when each landed |
 | Voice balance | Prepaid phone credit (if the module's on), warn thresholds |
 
 After the email sends, a **one-line headline posts to Slack `#system-messages`** ("✅ all systems green" / "⚠️ N failing — named rows"), and a send-failure of the digest email itself posts a 🔴 line — otherwise that failure is invisible until the *next* digest grades it. Full report stays in email; the channel is scannable history ([slack-gateway.md](slack-gateway.md) has the channel's full feed list). Dry-run skips the headline too.
