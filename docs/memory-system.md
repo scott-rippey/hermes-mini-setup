@@ -24,6 +24,7 @@ Not memory: the **Postgres KB** ([knowledge-base.md](knowledge-base.md)). Never 
 2. Raise `memory.user_char_limit` to 2200 (the 1,375 default leaves no learning headroom).
 3. Standing rules → SOUL, never memory.
 4. The ops digest re-runs the exact drift check daily from *outside* the agent — a future jam becomes a red row at breakfast, not chat noise.
+5. A **weekly CONTENT audit** (Mondays, riding the 3:05a `system_changes.py` job — also outside the agent, for the same reason: an agent can't reliably notice its own memory is bad, the broken memory is what it thinks with): a deterministic near-budget check (≥85% of the char limit) plus one flag-only GPT-5.5 pass over USER.md + MEMORY.md + SOUL.md — entries that contradict each other, restate a SOUL rule (redundant — behavior lives in SOUL, memory holds supporting facts), or are time-expired. Artifacts `~/.hermes/logs/memory-audit.{html,meta.json}`; the ops digest renders a "Memory content audit" section **only when there are findings** (or the audit itself errored). Resolve findings via chat (memory writes are ungated) or the backend; a SOUL line also has the agent flag contradictions/redundancy at save time instead of saving.
 
 ## Rules of the road
 

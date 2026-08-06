@@ -199,7 +199,12 @@ CREATE TABLE public.memory_documents (
     metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
     customer_id uuid,
     person_id uuid,
-    app_id uuid
+    app_id uuid,
+    status text DEFAULT 'active'::text NOT NULL,
+    superseded_by uuid,
+    last_used_at timestamp with time zone,
+    retrieval_count integer DEFAULT 0 NOT NULL,
+    CONSTRAINT memory_documents_status_check CHECK ((status = ANY (ARRAY['active'::text, 'superseded'::text, 'archived'::text])))
 );
 
 
@@ -489,7 +494,7 @@ CREATE TRIGGER update_meetings_updated_at BEFORE UPDATE ON public.meetings FOR E
 -- Name: memory_documents update_memory_documents_updated_at; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER update_memory_documents_updated_at BEFORE UPDATE ON public.memory_documents FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE TRIGGER update_memory_documents_updated_at BEFORE UPDATE OF path, content, metadata, customer_id, person_id, app_id, status ON public.memory_documents FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 
 --
@@ -602,6 +607,14 @@ ALTER TABLE ONLY public.memory_documents
 
 ALTER TABLE ONLY public.memory_documents
     ADD CONSTRAINT memory_documents_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.people(id) ON DELETE SET NULL;
+
+
+--
+-- Name: memory_documents memory_documents_superseded_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.memory_documents
+    ADD CONSTRAINT memory_documents_superseded_by_fkey FOREIGN KEY (superseded_by) REFERENCES public.memory_documents(id);
 
 
 --

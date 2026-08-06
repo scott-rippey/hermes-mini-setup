@@ -47,10 +47,13 @@ Build a clean Markdown profile with a heading per field above (omit or mark fiel
 
 ### 5. File to the KB
 
+Before the confirm in step 4, run `mcp_rag check_overlap` on the profile scoped to the customer — an overlap usually means a profile already exists: offer **merge** (fold the new details into the existing doc and re-store under its title) or **supersede** (`supersedes=` on store) rather than a duplicate. If the check errors, say so and proceed.
+
 On {{OPERATOR_FIRST_NAME}}'s confirmation, call `mcp_rag store`:
 - `content` = the structured profile Markdown
 - `title` = `Customer Profile — <Name>` (one canonical profile per customer; re-onboarding the same customer updates it)
 - `customer` = the customer's name/slug (attaches it to the canonical record)
+- `metadata` = `{ "type": "customer_profile" }` (required — the server enforces the type enum)
 
 Then tell {{OPERATOR_FIRST_NAME}} what was saved, under which customer, and which contacts you added as people. The research and proposals personas can now build on this profile.
 

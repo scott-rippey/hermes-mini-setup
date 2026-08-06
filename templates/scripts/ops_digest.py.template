@@ -459,6 +459,33 @@ def memory_health():
     return rows
 
 
+# ----------------------------------------------------------------------------- memory content audit
+
+def memory_content_audit():
+    """Read the weekly (Monday) content-audit artifact written by system_changes.py —
+    contradictions / SOUL-redundant / time-expired entries + near-budget stores in
+    USER.md / MEMORY.md. Returns a dict only when there is something to show
+    (findings, or the audit itself errored); None = no findings or no fresh artifact
+    (≤8 days), and the section is omitted entirely."""
+    meta_p = LOGS / "memory-audit.meta.json"
+    try:
+        if (datetime.datetime.now().timestamp() - meta_p.stat().st_mtime) > 8 * 86400:
+            return None
+        meta = json.loads(meta_p.read_text())
+    except (OSError, ValueError):
+        return None
+    if meta.get("error"):
+        return meta
+    if not meta.get("findings"):
+        return None
+    html_p = LOGS / "memory-audit.html"
+    try:
+        meta["html"] = html_p.read_text() if html_p.exists() else ""
+    except OSError:
+        meta["html"] = ""
+    return meta
+
+
 # ----------------------------------------------------------------------------- pending approvals
 
 def pending_approvals():
@@ -543,7 +570,7 @@ def section(title):
 
 
 def render(date_str, cron, sync_totals, total, by_source, by_model, kb, backup,
-           memrows, bland, syschanges, pendrows=()):
+           memrows, bland, syschanges, pendrows=(), memaudit=None):
     any_fail = (any(r[2] == "fail" for r in cron)
                 or any(s == "fail" for _, s, _ in memrows))
     status_word = "attention needed" if any_fail else "all green"
@@ -667,6 +694,19 @@ def render(date_str, cron, sync_totals, total, by_source, by_model, kb, backup,
             f'<td style="padding:7px 0;color:{MUTED}">{html.escape(detail)}</td></tr>')
     H.append('</table>')
 
+    # Memory content audit (weekly, Mondays — only rendered when there are findings)
+    if memaudit:
+        H.append(section("Memory content audit"))
+        if memaudit.get("error"):
+            H.append(f'<div style="font-size:13px">{badge("fail")} '
+                     f'<span style="color:{MUTED}">weekly audit errored: '
+                     f'{html.escape(memaudit["error"])}</span></div>')
+        else:
+            H.append(f'<div style="font-size:12px;color:{FAINT}">Weekly content check of '
+                     f'USER.md / MEMORY.md against SOUL ({memaudit.get("date", "?")}) — flag-only; '
+                     f'resolve via Hermes chat (memory writes are ungated) or the backend.</div>')
+            H.append(f'<div style="font-size:13px;color:{INK}">{memaudit.get("html", "")}</div>')
+
     # Staged writes awaiting approval (only rendered when something is pending)
     if pendrows:
         H.append(section("Staged writes awaiting approval"))
@@ -717,8 +757,9 @@ def main(dry_run=False):
     bland = bland_balance()
     syschanges = system_changes()
     pendrows = pending_approvals()
+    memaudit = memory_content_audit()
     body = render(date_str, cron, sync_totals, total, by_source, by_model, kb, backup,
-                  memrows, bland, syschanges, pendrows)
+                  memrows, bland, syschanges, pendrows, memaudit)
 
     any_fail = (any(r[2] == "fail" for r in cron)
                 or any(s == "fail" for _, s, _ in memrows))

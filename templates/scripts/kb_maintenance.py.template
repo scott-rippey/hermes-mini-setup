@@ -1,0 +1,191 @@
+# TEMPLATE — replace {{PLACEHOLDERS}} from setup/answers.md, save to ~/.hermes/scripts/,
+# then run BY HAND. On-demand manual report — no launchd job for this one.
+
+#!/usr/bin/env python3
+"""KB maintenance pass — on-demand report, resolves NOTHING on its own.
+
+Manual-first by design: run by hand, read the report, decide each
+item with the operator. Resolutions execute through the gate primitives (store with
+supersedes=, merge re-store, status flip via psql). Graduating a summary into
+a weekly ops-digest section is a BACKLOG item, gated on this proving useful.
+
+Sections:
+  1. Health stats        — docs by type/status, 30d growth, usage distribution
+  2. Stale current-state — *_profile docs untouched > STALE_DAYS, with usage signals
+  3. Research aging      — research docs by as_of (a snapshot must not read as current)
+  4. Contract violations — off-enum type/source (should be 0; server enforces on store)
+  5. Near-duplicate pairs — active curated docs (not repo_doc/meeting) whose chunks
+     overlap ≥ SIM_FLOOR; GPT-5.5 (`hermes -z`) proposes merge-vs-distinct. Proposals only.
+
+Usage:  python kb_maintenance.py [--no-llm]
+Deterministic core via psql (same pattern as ops_digest); the only LLM step is
+the near-dup adjudication, skipped with --no-llm or when there are no candidates.
+"""
+import datetime
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+HOME = Path.home()
+PSQL = "/opt/homebrew/bin/psql"
+DB = "{{KB_DB_NAME}}"
+NS = "{{AGENT_SLUG}}"
+HERMES = str(HOME / ".hermes/hermes-agent/venv/bin/hermes")
+STALE_DAYS = 90
+RESEARCH_AGE_DAYS = 120
+# Near-dup floor: profiles share a template so unrelated ones embed ~0.60-0.75
+# against each other (measured on the reference store — dozens of false pairs at
+# 0.60). Keep this high — a report drowning in false pairs stops getting read.
+SIM_FLOOR = 0.80
+DOC_TYPES = "('customer_profile','app_profile','meeting','repo_doc','research','reference','note')"
+
+
+def q(sql):
+    r = subprocess.run([PSQL, "-d", DB, "-t", "-A", "-F", "\t", "-c", sql],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"psql failed: {r.stderr.strip()[:300]}")
+    return [ln.split("\t") for ln in r.stdout.splitlines() if ln.strip()]
+
+
+def health():
+    rows = q(f"""
+        SELECT metadata->>'type', status, count(*),
+               count(*) FILTER (WHERE created_at > now() - interval '30 days'),
+               count(*) FILTER (WHERE retrieval_count > 0)
+        FROM memory_documents WHERE user_id = '{NS}'
+        GROUP BY 1, 2 ORDER BY 3 DESC""")
+    out = ["## 1. Health stats", "", "| type | status | docs | new 30d | ever retrieved |", "|---|---|---|---|---|"]
+    out += [f"| {t} | {s} | {n} | {new} | {used} |" for t, s, n, new, used in rows]
+    return out
+
+
+def stale_profiles():
+    rows = q(f"""
+        SELECT path, to_char(updated_at, 'YYYY-MM-DD'),
+               coalesce(to_char(last_used_at, 'YYYY-MM-DD'), 'never'), retrieval_count
+        FROM memory_documents
+        WHERE user_id = '{NS}' AND status = 'active'
+          AND metadata->>'type' IN ('customer_profile', 'app_profile')
+          AND updated_at < now() - interval '{STALE_DAYS} days'
+        ORDER BY updated_at""")
+    out = [f"## 2. Stale current-state docs (profiles untouched > {STALE_DAYS}d)", ""]
+    if not rows:
+        return out + ["None. ✓"]
+    out += ["A stale profile STILL BEING RETRIEVED is the dangerous kind — the agent is",
+            "actively answering from it. Refresh (merge new facts) or archive.", "",
+            "| doc | last updated | last retrieved | times |", "|---|---|---|---|"]
+    out += [f"| {p} | {upd} | {used} | {n} |" for p, upd, used, n in rows]
+    return out
+
+
+def research_aging():
+    rows = q(f"""
+        SELECT path, metadata->>'as_of',
+               (current_date - to_date(metadata->>'as_of', 'YYYY-MM'))::int
+        FROM memory_documents
+        WHERE user_id = '{NS}' AND status = 'active' AND metadata->>'type' = 'research'
+        ORDER BY metadata->>'as_of'""")
+    out = ["## 3. Research docs by as_of", ""]
+    if not rows:
+        return out + ["None. ✓"]
+    out += ["| doc | as_of | age | note |", "|---|---|---|---|"]
+    for p, as_of, age_d in rows:
+        age_d = int(age_d)
+        note = f"**> {RESEARCH_AGE_DAYS}d — verify before relying on it**" if age_d > RESEARCH_AGE_DAYS else ""
+        out.append(f"| {p} | {as_of} | {age_d}d | {note} |")
+    return out
+
+
+def violations():
+    rows = q(f"""
+        SELECT path, coalesce(metadata->>'type', '(missing)'), coalesce(metadata->>'source', '-')
+        FROM memory_documents
+        WHERE user_id = '{NS}'
+          AND (metadata->>'type' IS NULL OR metadata->>'type' NOT IN {DOC_TYPES}
+               OR (metadata->>'source' IS NOT NULL
+                   AND metadata->>'source' NOT IN ('github','granola','slack','upload','agent'))
+               OR (metadata->>'type' = 'research'
+                   AND metadata->>'as_of' !~ '^[0-9][0-9][0-9][0-9]-[0-9][0-9]$'))""")
+    out = ["## 4. Metadata contract violations", ""]
+    if not rows:
+        return out + ["None. ✓  (server enforces the contract on store; a violation here means a manual psql edit)"]
+    out += ["| doc | type | source |", "|---|---|---|"]
+    out += [f"| {p} | {t} | {s} |" for p, t, s in rows]
+    return out
+
+
+def near_dup_candidates():
+    return q(f"""
+        WITH curated AS (
+            SELECT id, path FROM memory_documents
+            WHERE user_id = '{NS}' AND status = 'active'
+              AND metadata->>'type' NOT IN ('repo_doc', 'meeting'))
+        SELECT a.path, b.path, round((1 - (
+                 SELECT min(ca.embedding <=> cb.embedding)
+                 FROM memory_chunks ca, memory_chunks cb
+                 WHERE ca.document_id = a.id AND cb.document_id = b.id
+                   AND ca.embedding IS NOT NULL AND cb.embedding IS NOT NULL))::numeric, 3) AS sim
+        FROM curated a JOIN curated b ON a.id < b.id
+        WHERE (1 - (SELECT min(ca.embedding <=> cb.embedding)
+                    FROM memory_chunks ca, memory_chunks cb
+                    WHERE ca.document_id = a.id AND cb.document_id = b.id
+                      AND ca.embedding IS NOT NULL AND cb.embedding IS NOT NULL)) >= {SIM_FLOOR}
+        ORDER BY sim DESC""")
+
+
+def adjudicate(pairs):
+    """One `hermes -z` call proposing merge-vs-distinct for candidate pairs. Proposals only."""
+    blocks = []
+    for pa, pb, sim in pairs:
+        excerpts = q(f"""SELECT path, left(regexp_replace(content, E'[\\n\\t]+', ' ', 'g'), 1200)
+                         FROM memory_documents
+                         WHERE user_id = '{NS}' AND path IN ($q${pa}$q$, $q${pb}$q$)""")
+        ex = {p: c for p, c in excerpts}
+        blocks.append(f"PAIR (similarity {sim}):\n--- A: {pa}\n{ex.get(pa, '')}\n--- B: {pb}\n{ex.get(pb, '')}")
+    prompt = (
+        "You are reviewing pairs of knowledge-base documents that embed as near-duplicates. "
+        "For EACH pair, judge from the excerpts: MERGE (same subject, one should absorb the "
+        "other — say which direction and why) or DISTINCT (genuinely different subjects/scopes "
+        "— say what distinguishes them). Propose only; a human decides.\n\n"
+        + "\n\n".join(blocks)
+        + "\n\nOutput between <!--KBMAINT--> and <!--/KBMAINT--> markers: one markdown bullet "
+          "per pair — `- **MERGE** A ← B: reason` or `- **DISTINCT**: reason` (name the docs)."
+    )
+    try:
+        r = subprocess.run([HERMES, "-z", prompt], capture_output=True, text=True, timeout=300)
+        m = re.search(r"<!--KBMAINT-->(.*?)<!--/KBMAINT-->", r.stdout or "", re.S)
+        return (m.group(1).strip() if m else "") or "_(adjudication returned nothing usable)_"
+    except Exception as e:
+        return f"_(adjudication unavailable: {e})_"
+
+
+def near_dups(no_llm):
+    pairs = near_dup_candidates()
+    out = [f"## 5. Near-duplicate pairs (active curated docs, chunk overlap ≥ {SIM_FLOOR})", ""]
+    if not pairs:
+        return out + ["None. ✓"]
+    out += [f"- {pa}  ↔  {pb}  (sim {sim})" for pa, pb, sim in pairs]
+    if no_llm:
+        out += ["", "_(--no-llm: skipped merge-vs-distinct adjudication)_"]
+    else:
+        out += ["", "**GPT-5.5 proposals (human decides):**", "", adjudicate(pairs)]
+    out += ["", "Resolve a MERGE via the gate primitives: draft the integrated rewrite, re-store",
+            "under the surviving title, and supersede the other (`supersedes=` on store)."]
+    return out
+
+
+def main():
+    no_llm = "--no-llm" in sys.argv
+    today = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    report = [f"# KB maintenance report — {today}", "",
+              "Flag-only. Nothing below changed anything; every resolution is {{OPERATOR_FIRST_NAME}}'s call,",
+              "executed through the gate primitives (supersede / merge re-store / status flip).", ""]
+    for part in (health(), stale_profiles(), research_aging(), violations(), near_dups(no_llm)):
+        report += part + [""]
+    print("\n".join(report))
+
+
+if __name__ == "__main__":
+    main()

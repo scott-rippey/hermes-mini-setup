@@ -37,7 +37,7 @@ Every document lands under exactly one of: a **customer** (company), the **gener
 ### 3. Derive a clean title + type
 
 - **Title** — clear, specific, human, and unique; it's the upsert key. e.g. `Acme — MSA proposal (2026-06)`, `Acme Portal — pricing spec`. If you're updating a document that already exists, reuse its exact title so it replaces rather than duplicates (check with `search`).
-- **Type** — classify: `proposal`, `contract`, `notes`, `research`, `report`, `spec`, `reference`, `invoice`, etc. Goes in metadata.
+- **Type** — classify into the **enforced enum** (the server rejects anything else): `customer_profile` · `app_profile` · `research` (requires `as_of: "YYYY-MM"` — the month the research reflects) · `reference` (playbooks, skeletons, signed proposals/contracts, canonical docs) · `note` (everything else — prep notes, contact notes, strategy). Goes in `metadata.type`; put the specific kind (e.g. `document_type: "proposal"`, `report`, `spec`) in additional metadata keys as useful. (`meeting` is set by `add_meeting`; `repo_doc` is reserved for the github sync.)
 - **Date** — if the document has a meaningful date, note it (in the title and/or metadata).
 
 > Filing a **meeting**? Use **`add_meeting`** instead of `store` (it also creates the structured `meetings` row). This skill is for general documents.
@@ -48,9 +48,19 @@ Pass clean text to `store` — strip repeated headers/footers, page furniture, a
 
 ### 5. Present the filing plan + confirm (the gate)
 
-Show {{OPERATOR_FIRST_NAME}} exactly what you'll do before writing:
+**First run `mcp_rag check_overlap`** with the normalized content and the same customer/person/app scope. Then show {{OPERATOR_FIRST_NAME}} exactly what you'll do before writing:
 
 > "I'll file **‹title›** under **‹Acme → Jane / general / the Acme Portal app›** as a **‹type›**. OK?"
+
+If the check returned overlaps, include them in the offer with the choices:
+
+> "Heads up — this overlaps **‹existing title›** (‹type›, last updated ‹date›). **Supersede** it, **merge** into it, **keep both**, or **skip**?"
+
+- **Supersede** → store the new doc with `supersedes=` (one atomic call — never a separate cleanup).
+- **Merge** → draft the integrated rewrite, show it, and on approval re-store under the **existing** title, appending one line to its `metadata.history` (e.g. `"2026-08-06: folded in <what>"`).
+- **Keep both** → store normally. **Skip** → nothing is written.
+
+If `check_overlap` errors (`check: "unavailable"`), say the overlap check didn't run and proceed with the normal offer — the check never blocks a filing.
 
 Store **only** on his explicit yes. If he says no / not now, drop it — nothing is written.
 

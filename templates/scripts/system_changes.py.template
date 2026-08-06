@@ -22,6 +22,7 @@ Smoke-test:  python system_changes.py
 """
 import datetime
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -35,6 +36,13 @@ HERMES = str(HOME / ".hermes/hermes-agent/venv/bin/hermes")
 META = LOGS / "system-changes.meta.json"
 HTMLF = LOGS / "system-changes.html"
 DIFF_CAP = 12000  # chars of raw diff handed to the model
+
+# --- weekly built-in-memory content audit (Mondays, riding this job) ---
+MEMORIES = HOME / ".hermes" / "memories"
+SOUL = HOME / ".hermes" / "SOUL.md"
+CONFIG = HOME / ".hermes" / "config.yaml"
+AUDIT_META = LOGS / "memory-audit.meta.json"
+AUDIT_HTML = LOGS / "memory-audit.html"
 
 
 def log(msg):
@@ -127,9 +135,83 @@ def narrative(facts):
     return frag if ("<p" in frag or "<ul" in frag or "<li" in frag) else ""
 
 
+def _mem_limits():
+    """user_char_limit / memory_char_limit from config.yaml (same regex as ops_digest)."""
+    txt = CONFIG.read_text() if CONFIG.exists() else ""
+    def grab(key, default):
+        m = re.search(rf"^\s*{key}:\s*(\d+)", txt, re.M)
+        return int(m.group(1)) if m else default
+    return grab("user_char_limit", 1375), grab("memory_char_limit", 2200)
+
+
+def memory_audit():
+    """Weekly CONTENT audit of built-in memory (USER.md / MEMORY.md) against SOUL.md.
+    Flag-only, run from OUTSIDE the agent (an agent can't reliably notice its own
+    memory is bad — the broken memory is what it thinks with). The daily ops-digest
+    format/drift check stays separate; this one judges content: contradictions,
+    entries redundant with a SOUL rule, time-expired entries, near-budget stores.
+    Writes memory-audit.html (findings fragment, may be empty) + memory-audit.meta.json.
+    Resolution path: the operator fixes via Hermes chat (memory writes are ungated) or backend."""
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    user_limit, mem_limit = _mem_limits()
+    findings = []
+    texts = {}
+    for name, limit in (("USER.md", user_limit), ("MEMORY.md", mem_limit)):
+        p = MEMORIES / name
+        txt = p.read_text() if p.exists() else ""
+        texts[name] = txt
+        if txt and len(txt) >= 0.85 * limit:  # deterministic: budget proximity
+            findings.append(f"<li><strong>{name}</strong> is at {len(txt)}/{limit} chars "
+                            f"(&ge;85% of budget) — trim or raise the limit before writes start failing.</li>")
+    soul = SOUL.read_text() if SOUL.exists() else ""
+    llm_ok = False
+    if texts["USER.md"] or texts["MEMORY.md"]:
+        prompt = (
+            "You are auditing an AI agent's two built-in memory files against its standing-rules "
+            "file (SOUL.md). Entries are separated by '§'. FLAG ONLY, do not rewrite anything.\n\n"
+            "Flag an entry ONLY if it clearly:\n"
+            "1. CONTRADICTS another memory entry (they can't both hold), or\n"
+            "2. RESTATES a rule already in SOUL.md (redundant — behavior rules live in SOUL, "
+            "memory is for supporting facts; an entry ADDING detail beyond SOUL is fine), or\n"
+            "3. IS TIME-EXPIRED (references a date/event now clearly past, framed as upcoming).\n\n"
+            f"Today's date: {today}\n\n"
+            f"=== SOUL.md ===\n{soul}\n\n"
+            f"=== USER.md ===\n{texts['USER.md']}\n\n"
+            f"=== MEMORY.md ===\n{texts['MEMORY.md']}\n\n"
+            "Output between <!--MEMAUDIT--> and <!--/MEMAUDIT--> markers: one <li> per finding "
+            "(name the file, quote the first ~8 words of the entry, state the problem in one "
+            "clause), or exactly NONE if nothing qualifies. Be conservative — a wrong flag "
+            "wastes the operator's time."
+        )
+        try:
+            r = subprocess.run([HERMES, "-z", prompt], capture_output=True, text=True, timeout=300)
+            m = re.search(r"<!--MEMAUDIT-->(.*?)<!--/MEMAUDIT-->", r.stdout or "", re.S)
+            frag = re.sub(r"```html|```", "", (m.group(1) if m else "")).strip()
+            llm_ok = bool(m)
+            if frag and frag.upper() != "NONE" and "<li" in frag:
+                findings.extend(re.findall(r"<li[^>]*>.*?</li>", frag, re.S))
+        except Exception as e:
+            log(f"memory audit LLM step failed: {e}")
+    AUDIT_HTML.write_text(
+        f'<ul style="margin:6px 0 0 18px;padding:0">{"".join(findings)}</ul>' if findings else "")
+    AUDIT_META.write_text(json.dumps({"date": today, "findings": len(findings), "llm_ok": llm_ok}, indent=2))
+    log(f"memory audit: findings={len(findings)} llm_ok={llm_ok}")
+
+
 def main():
     LOGS.mkdir(parents=True, exist_ok=True)
     committed = snapshot()
+    # Monday-only content audit of built-in memory; failure never blocks the ledger job
+    if datetime.datetime.now().weekday() == 0 or os.environ.get("FORCE_MEMORY_AUDIT"):
+        try:
+            memory_audit()
+        except Exception as e:
+            log(f"memory audit failed: {e}")
+            try:
+                AUDIT_META.write_text(json.dumps(
+                    {"date": datetime.datetime.now().strftime("%Y-%m-%d"), "error": str(e)[:200]}))
+            except Exception:
+                pass
     base = window_base()
     today = datetime.datetime.now().strftime("%Y-%m-%d")
 

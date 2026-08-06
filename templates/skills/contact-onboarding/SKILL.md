@@ -52,7 +52,7 @@ Show {{OPERATOR_FIRST_NAME}} the contact(s) you're about to add — name, role, 
 
 ### 5. Offer to file any notes (do not auto-store)
 
-If {{OPERATOR_FIRST_NAME}} gave context worth keeping (background, a meeting note, what they need), **offer** to file it as a document under that person — `mcp_rag store` with `person` = the contact's name/slug (attaches it to the person; if they belong to **one** company it's filed there automatically, if **several** also pass `customer` to say which). Only store on {{OPERATOR_FIRST_NAME}}'s explicit say-so; read-and-dismiss is the default.
+If {{OPERATOR_FIRST_NAME}} gave context worth keeping (background, a meeting note, what they need), **offer** to file it as a document under that person — `mcp_rag store` with `person` = the contact's name/slug (attaches it to the person; if they belong to **one** company it's filed there automatically, if **several** also pass `customer` to say which) and `metadata` `{ "type": "note", "source": "slack" }` (type is required — server-enforced enum). **Run `mcp_rag check_overlap` first** with the note content and the same scope; surface any overlaps in the offer (supersede / merge / keep both / skip). Only store on {{OPERATOR_FIRST_NAME}}'s explicit say-so; read-and-dismiss is the default.
 
 Then tell {{OPERATOR_FIRST_NAME}} which contacts were added/updated and under which company.
 

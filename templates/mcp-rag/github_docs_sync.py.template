@@ -115,7 +115,7 @@ def sync_app(app: dict) -> dict:
             if not content.strip():     # whitespace-only safety net
                 continue
             res = server._store(content, title, app=app["slug"],
-                                metadata={"source": "github", "repo": repo, "branch": branch, "path": path, "sha": sha})
+                                metadata={"type": "repo_doc", "source": "github", "repo": repo, "branch": branch, "path": path, "sha": sha})
         except Exception as e:  # one bad file must not kill the app's whole sync
             res = {"error": f"{type(e).__name__}: {e}"}
         if res.get("error"):

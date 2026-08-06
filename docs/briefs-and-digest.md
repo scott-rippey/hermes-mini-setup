@@ -25,6 +25,7 @@ Deterministic (no LLM) except ONE clearly-labeled section. Subject flips to ⚠�
 | Backup | Last bundle name/size/age |
 | **System changes** | The 3:05 ledger snapshot's diffstat + the **AI narrative** — the one synthesized section, hard-grounded (statements must be diff-evidenced; unsure ⇒ omit) with the raw diffstat always rendered beneath as checkable truth |
 | **Memory stores** | A daily mirror of the memory tool's drift check (format round-trip + budgets + refused-write detection) — run from *outside* the agent |
+| **Memory content audit** | Only rendered when the weekly (Monday) audit has findings or errored: contradictions between memory entries, entries restating a SOUL rule, time-expired entries, near-budget stores (≥85%). Reads the `memory-audit.{html,meta.json}` artifact (≤8 days fresh) written by the change-narrative feeder — see [memory-system.md](memory-system.md) |
 | **Staged writes awaiting approval** | Only rendered when `~/.hermes/pending/*/` is non-empty: each staged item's subsystem, summary, origin, age. Informational — the q5m `pending-watch` job already pinged the ops channel when each landed |
 | Voice balance | Prepaid phone credit (if the module's on), warn thresholds |
 
@@ -33,6 +34,8 @@ After the email sends, a **one-line headline posts to Slack `#system-messages`**
 ## The change-narrative feeder — 3:05 (`templates/scripts/system_changes.py.template`)
 
 Commits the day's `~/.hermes` changes to the local ledger → diffs the last 24h (plus the docs repo's delta) → a short AI narrative under the grounding contract → artifacts the digest embeds. Runs before the 3:10 push and 3:15 bundle so all three nightly captures agree.
+
+**Mondays it also runs the built-in-memory content audit** (`memory_audit()` — deterministic near-budget check + one flag-only AI pass of USER.md/MEMORY.md against SOUL; writes `logs/memory-audit.{html,meta.json}` for the digest's findings-only section; `FORCE_MEMORY_AUDIT=1` forces a run any day). Wrapped so an audit failure never blocks the ledger snapshot — it reports itself in the meta and surfaces as a FAIL line in the digest section instead.
 
 ## Why this split works
 

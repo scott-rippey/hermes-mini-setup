@@ -1,6 +1,6 @@
 # mcp-rag — the KB server (install notes)
 
-The custom MCP server that gives the agent its knowledge-base hands: `mcp_rag_store / search / get / customers / add_customer / people / add_person / apps / add_app / add_meeting`. It embeds on store (OpenAI `text-embedding-3-large`), searches via pgvector cosine, and enforces the identity model (alias→canonical resolution, find-or-link people, one-business apps, meeting dedupe). **It is the ONLY writer of the KB tables — keep it that way.**
+The custom MCP server that gives the agent its knowledge-base hands: `mcp_rag_store / search / get / check_overlap / customers / add_customer / people / add_person / apps / add_app / add_meeting`. It embeds on store (OpenAI `text-embedding-3-large`), searches via pgvector cosine, and enforces the identity model (alias→canonical resolution, find-or-link people, one-business apps, meeting dedupe). **It is the ONLY writer of the KB tables — keep it that way.**
 
 ## Install (installer does this in Phase 4)
 

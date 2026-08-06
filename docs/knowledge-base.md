@@ -5,10 +5,22 @@
 ## Shape
 
 - **DB:** local Postgres (Homebrew service, localhost-only), pgvector enabled. Built verbatim from [`sql/schema.sql`](../sql/schema.sql) + your generated seeds.
-- **Server:** the custom MCP server ([templates/mcp-rag/](../templates/mcp-rag/README.md)) — **the only writer**. Tools: `mcp_rag_store / search / get / customers / add_customer / people / add_person / apps / add_app / add_meeting`.
+- **Server:** the custom MCP server ([templates/mcp-rag/](../templates/mcp-rag/README.md)) — **the only writer**. Tools: `mcp_rag_store / search / get / check_overlap / customers / add_customer / people / add_person / apps / add_app / add_meeting`.
 - **Embeddings:** OpenAI `text-embedding-3-large` (3072-dim) on store. (3072 exceeds pgvector's HNSW cap — fine at personal scale; `halfvec` is the scale path.)
 - **Search is HYBRID:** every query runs BOTH cosine-vector similarity AND Postgres full-text (`content_tsv` generated tsvector + GIN — already in `sql/schema.sql`; `websearch_to_tsquery`, so quoted phrases work), merged by **reciprocal-rank fusion** (k=60; no cross-method score normalization). Keyword catches exact terms/proper nouns embeddings miss; each result carries `match: vector|keyword|both`. An empty/stopword-only keyword branch degrades gracefully to vector-only.
 - **Results are one-per-DOCUMENT with small-to-big context:** chunk hits dedupe to their best-ranked document (no more one doc's chunks eating every slot). Content returned: the **full document** when ≤ `RAG_FULL_DOC_CHARS` (default 6000 chars — most KB docs fit) labeled `context: full_document`, else the matched chunk ± one neighbor labeled `context: window` (the agent calls `get` for the rest). Candidate pool = `max(limit×3, 15)` chunks per branch before fusion/dedup.
+
+## The maintenance layer (status, staleness, conflicts)
+
+**Governing invariant: no document's status ever changes without the operator's explicit decision.** The system flags; the operator decides. No timers, no auto-decay, no auto-merge; hard delete is a manual psql action only.
+
+- **Metadata contract (server-enforced on store):** `metadata.type` is REQUIRED — `customer_profile · app_profile · meeting · repo_doc · research · reference · note`. `metadata.source` (optional) — `github · granola · slack · upload · agent`. `type: research` also requires `as_of: "YYYY-MM"`. The type derives the maintenance class: `repo_doc` self-maintains (nightly sync), `meeting` is forever-history, `*_profile` is current-state (the staleness risk), `research`/`reference`/`note` are dated snapshots. Signed proposals/contracts file as `reference` with `document_type` carrying the kind.
+- **Status lifecycle:** `active → superseded | archived` (`status` + `superseded_by` on `memory_documents`). Search and the default `get` path return **active only**; a pointed `get` on a non-active doc still works and says why it's hidden. `store` takes `supersedes=<id-or-title>` — files the new doc AND flips the old one **in one transaction** (no separate cleanup step an agent can falsely claim).
+- **Usage tracking:** the server bumps `last_used_at`/`retrieval_count` on every doc returned by `search`/`get`. The `updated_at` trigger is **column-scoped** so usage bumps never reset it — `updated_at` stays a pure staleness signal.
+- **Gate-time conflict surfacing:** before any filing offer, the agent runs `check_overlap` (draft content + scope → top ≤3 similar active docs, floor 0.45 cosine, `RAG_OVERLAP_SIM_FLOOR`). Overlaps go INTO the offer: **supersede / merge / keep both / skip** — the operator classifies in the approval conversation they're already having. Merge = the agent drafts an integrated rewrite, the operator approves, re-store under the existing title (+ a one-line `metadata.history` entry). The check soft-fails: an error never blocks a filing.
+- **Maintenance pass:** [`templates/scripts/kb_maintenance.py.template`](../templates/scripts/kb_maintenance.py.template) — on-demand, flag-only report run by hand (health stats · stale profiles >90d with usage signals · research by `as_of` · contract violations · near-dup pairs ≥0.80 with GPT-5.5 merge-vs-distinct proposals). Manual-first; **no launchd job** — schedule nothing until the report proves useful.
+- **Built-in memory content audit** (the non-KB sibling): weekly, Mondays, riding the `system_changes.py` job — see [memory-system.md](memory-system.md).
+- Fresh installs get all of this from `sql/schema.sql`. Installs created before the maintenance layer shipped: apply `sql/migrations/007_maintenance_layer.sql` (columns + column-scoped trigger; **write your own metadata backfill** — the file explains how), then update the mcp-rag server from the template.
 
 ## The identity model (no-drift by construction)
 

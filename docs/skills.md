@@ -18,7 +18,7 @@ Enable/disable = the **`skills.disabled` list in `config.yaml`** + a gateway res
 | customer-brief | this repo | **Read-only** account snapshot: deterministic gather (people/apps/meetings/KB inventory/pending e-sign) + scoped KB search + email search → one grounded "where are we with X" brief with an honest gaps line; offers deliverable-export |
 | contact-onboarding | this repo | Add/link people (many-to-many, per-company role) |
 | deliverable-export | this repo | Markdown → branded DOCX/PDF → scratch dir → optional email/KB |
-| file-to-kb | this repo | The offer-then-file gate for uploads |
+| file-to-kb | this repo | The offer-then-file gate for uploads; runs `check_overlap` before the offer and surfaces supersede/merge/keep-both, types per the enforced metadata enum |
 | proposal-esign | this repo | Optional: proposals out for e-signature via SignWell + the 15-min collection poller ([proposal-esign.md](proposal-esign.md)) |
 | meeting-reports | your build (optional) | The nightly meeting pipeline |
 | google-workspace | bundled **(modified — this repo ships the mods)** | All Google I/O |

@@ -64,6 +64,13 @@ CHUNK_TOKENS     = int(os.environ.get("RAG_CHUNK_TOKENS", "400"))
 CHUNK_OVERLAP    = int(os.environ.get("RAG_CHUNK_OVERLAP", "50"))
 FULL_DOC_CHARS   = int(os.environ.get("RAG_FULL_DOC_CHARS", "6000"))  # search returns whole docs up to this size
 
+# --- metadata contract (enforced on store; migration 007 backfilled the store to it) ---
+# type drives the maintenance class: repo_doc = self-maintaining (github sync),
+# meeting = forever history, *_profile = current-state (staleness watch),
+# research/reference/note = dated snapshot.
+DOC_TYPES   = {"customer_profile", "app_profile", "meeting", "repo_doc", "research", "reference", "note"}
+DOC_SOURCES = {"github", "granola", "slack", "upload", "agent"}
+
 _oai = OpenAI()
 _enc = tiktoken.get_encoding("cl100k_base")  # text-embedding-3-* tokenizer
 mcp = FastMCP("rag")
@@ -186,15 +193,101 @@ def _resolve_app(name, cur):
             "customer_id": row[3], "customer_slug": row[4], "customer_name": row[5]}
 
 
+def _resolve_doc(ref, cur):
+    """Resolve a document by id (uuid) or exact title/path within the namespace."""
+    ref = (ref or "").strip()
+    if not ref:
+        return None
+    try:
+        cur.execute("SELECT id, path, status FROM memory_documents WHERE id = %s::uuid AND user_id = %s",
+                    (str(uuid.UUID(ref)), NAMESPACE))
+    except ValueError:
+        cur.execute("SELECT id, path, status FROM memory_documents WHERE path = %s AND user_id = %s AND agent_id = %s",
+                    (ref, NAMESPACE, AGENT_ID))
+    row = cur.fetchone()
+    return {"id": row[0], "path": row[1], "status": row[2]} if row else None
+
+
+OVERLAP_SIM_FLOOR = float(os.environ.get("RAG_OVERLAP_SIM_FLOOR", "0.45"))
+
+
+def _check_overlap(content, customer=None, person=None, app=None) -> dict:
+    """Pre-store dry run for the offer-then-file gate: find existing ACTIVE docs the
+    draft overlaps, so the agent can surface supersede/merge/keep-both at the offer.
+    Soft-fails by design — an error here must never block a filing."""
+    content = (content or "").strip()
+    if not content:
+        return {"overlaps": [], "note": "empty content"}
+    try:
+        chunks = _chunk(content)[:3]  # the head of a doc carries its identity
+        embs = _embed(chunks)
+        best = {}  # doc_id -> row with max similarity across draft chunks
+        with _connect() as conn, conn.cursor() as cur:
+            cust = _resolve_customer(customer, cur) if customer else None
+            pers = _resolve_person(person, cur, cust["id"] if cust else None) if person else None
+            ap = _resolve_app(app, cur) if app else None
+            for emb in embs:
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (d.id) d.id, d.path, d.metadata->>'type',
+                           d.updated_at, d.last_used_at,
+                           1 - (c.embedding <=> %(qv)s::vector) AS sim,
+                           left(c.content, 240) AS snippet
+                    FROM memory_chunks c
+                    JOIN memory_documents d ON d.id = c.document_id
+                    WHERE c.embedding IS NOT NULL
+                      AND d.user_id = %(ns)s AND d.agent_id = %(agent)s
+                      AND d.status = 'active'
+                      AND (%(cust)s::uuid IS NULL OR EXISTS (SELECT 1 FROM document_customers dc
+                             WHERE dc.document_id = d.id AND dc.customer_id = %(cust)s::uuid))
+                      AND (%(pers)s::uuid IS NULL OR EXISTS (SELECT 1 FROM document_people dp
+                             WHERE dp.document_id = d.id AND dp.person_id = %(pers)s::uuid))
+                      AND (%(app)s::uuid IS NULL OR d.app_id = %(app)s::uuid)
+                    ORDER BY d.id, c.embedding <=> %(qv)s::vector
+                    """,
+                    {"qv": _vec(emb), "ns": NAMESPACE, "agent": AGENT_ID,
+                     "cust": cust["id"] if cust else None,
+                     "pers": pers["id"] if pers else None,
+                     "app": ap["id"] if ap else None},
+                )
+                for did, path, dtype, upd, used, sim, snip in cur.fetchall():
+                    if sim is None or sim < OVERLAP_SIM_FLOOR:
+                        continue
+                    if did not in best or sim > best[did]["similarity"]:
+                        best[did] = {"document_id": str(did), "title": path, "type": dtype,
+                                     "updated_at": str(upd), "last_used_at": str(used) if used else None,
+                                     "similarity": round(float(sim), 4), "snippet": snip}
+        top = sorted(best.values(), key=lambda r: -r["similarity"])[:3]
+        return {"overlaps": top}
+    except Exception as e:  # noqa: BLE001 — detection degrades, the gate never does
+        return {"overlaps": [], "check": "unavailable", "error": str(e)[:200]}
+
+
 def _store(content, title, customer=None, person=None, app=None, metadata=None,
-           people=None, customers=None) -> dict:
+           people=None, customers=None, supersedes=None) -> dict:
     content = (content or "").strip()
     if not content:
         return {"error": "empty content"}
     title = (title or "untitled").strip()
+    metadata = dict(metadata or {})
+    doc_type = metadata.get("type")
+    if doc_type not in DOC_TYPES:
+        return {"error": f"metadata.type is required and must be one of {sorted(DOC_TYPES)} (got {doc_type!r})"}
+    src = metadata.get("source")
+    if src is not None and src not in DOC_SOURCES:
+        return {"error": f"metadata.source must be one of {sorted(DOC_SOURCES)} (got {src!r})"}
+    if doc_type == "research" and not re.fullmatch(r"\d{4}-\d{2}", str(metadata.get("as_of") or "")):
+        return {"error": "research docs require metadata.as_of = 'YYYY-MM' (the month the research reflects)"}
     chunks = _chunk(content)
     embs = _embed(chunks)
-    with _connect(autocommit=False) as conn, conn.cursor() as cur:  # atomic: customer + doc + chunks + links
+    with _connect(autocommit=False) as conn, conn.cursor() as cur:  # atomic: customer + doc + chunks + links (+ supersede flip)
+        old_doc = None
+        if supersedes:
+            old_doc = _resolve_doc(supersedes, cur)
+            if not old_doc:
+                return {"error": f"supersedes target '{supersedes}' not found (pass its document_id or exact title)"}
+            if old_doc["path"] == title:
+                return {"error": "supersedes target has the same title — re-storing a title already replaces that document; drop supersedes="}
         app_row = None
         person_row = None
         cust = None
@@ -276,7 +369,11 @@ def _store(content, title, customer=None, person=None, app=None, metadata=None,
             cur.execute("INSERT INTO document_people (document_id, person_id) VALUES (%s, %s)", (doc_id, pid))
         for cid in link_customers:
             cur.execute("INSERT INTO document_customers (document_id, customer_id) VALUES (%s, %s)", (doc_id, cid))
-    return {"document_id": str(doc_id), "title": title,
+        if old_doc:  # same transaction: the new doc lands AND the old one is superseded, or neither
+            cur.execute("UPDATE memory_documents SET status = 'superseded', superseded_by = %s WHERE id = %s",
+                        (doc_id, old_doc["id"]))
+    result_supersede = {"superseded": old_doc["path"]} if old_doc else {}
+    return {**result_supersede, "document_id": str(doc_id), "title": title,
             "customer": cust["slug"] if cust else None,
             "person": person_row["slug"] if person_row else None,
             "app": app_row["slug"] if app_row else None, "chunks": len(chunks),
@@ -356,6 +453,7 @@ def _search(query, customer=None, person=None, app=None, limit: int = 5) -> list
         app_id = ap["id"] if ap else None
         scope = """
               d.user_id = %(ns)s AND d.agent_id = %(agent)s
+              AND d.status = 'active'
               AND (%(cust)s::uuid IS NULL OR EXISTS (SELECT 1 FROM document_customers dc
                      WHERE dc.document_id = d.id AND dc.customer_id = %(cust)s::uuid))
               AND (%(pers)s::uuid IS NULL OR EXISTS (SELECT 1 FROM document_people dp
@@ -454,7 +552,23 @@ def _search(query, customer=None, person=None, app=None, limit: int = 5) -> list
                  "match": "both" if (r[9] and r[10]) else ("vector" if r[9] else "keyword"),
                  "context": context,  # full_document | window (use get() for the rest)
                  "content": content})
+        _bump_usage(cur, [r["document_id"] for r in out])
     return out
+
+
+def _bump_usage(cur, doc_ids: list) -> None:
+    """Mark docs as retrieved (last_used_at + retrieval_count). Never fails the caller;
+    never touches updated_at (the updated_at trigger is column-scoped past these)."""
+    if not doc_ids:
+        return
+    try:
+        cur.execute(
+            "UPDATE memory_documents SET last_used_at = now(), retrieval_count = retrieval_count + 1 "
+            "WHERE id = ANY(%s::uuid[])",
+            (doc_ids,),
+        )
+    except Exception:
+        pass
 
 
 def _get(document_id: str) -> dict:
@@ -468,22 +582,36 @@ def _get(document_id: str) -> dict:
                    (SELECT array_agg(cu.slug ORDER BY cu.slug) FROM document_customers dc
                     JOIN customers cu ON cu.id = dc.customer_id WHERE dc.document_id = d.id) AS customers,
                    (SELECT array_agg(pp.slug ORDER BY pp.slug) FROM document_people dp
-                    JOIN people pp ON pp.id = dp.person_id WHERE dp.document_id = d.id) AS people
+                    JOIN people pp ON pp.id = dp.person_id WHERE dp.document_id = d.id) AS people,
+                   d.status, d.superseded_by
             FROM memory_documents d WHERE d.id = %s::uuid AND d.user_id = %s
             """,
             (document_id, NAMESPACE),
         )
         row = cur.fetchone()
+        if row:
+            _bump_usage(cur, [document_id])
     if not row:
         return {"error": f"document {document_id} not found"}
-    return {"title": row[0], "content": row[1], "metadata": row[2], "customer": row[3], "person": row[4],
-            "app": row[5], "customers": list(row[6] or []), "people": list(row[7] or [])}
+    out = {"title": row[0], "content": row[1], "metadata": row[2], "customer": row[3], "person": row[4],
+           "app": row[5], "customers": list(row[6] or []), "people": list(row[7] or []), "status": row[8]}
+    if row[8] != "active":  # a pointed get still works, but says why search won't surface it
+        out["note"] = f"this document is {row[8]} and excluded from search results"
+        if row[9]:
+            out["superseded_by"] = str(row[9])
+    return out
 
 
 @mcp.tool()
-def store(content: str, title: str, customer: str | None = None, person: str | None = None, app: str | None = None, metadata: dict | None = None, people: list[str] | None = None, customers: list[str] | None = None) -> dict:
-    """Save to the user's KNOWLEDGE BASE ("KB" / "knowledge base") — the local Postgres vector store. ALWAYS use this (NOT built-in memory) whenever the user mentions the knowledge base or KB, or asks to store/save a document, customer info, proposal, research, notes, or an uploaded file. `customer` attaches the document to a customer/identity (name, slug, or alias — resolved to the canonical record, created if genuinely new; defaults to the user's own identity). `person` files the document under a specific contact (name, slug, email, or alias); if that person belongs to one company it attaches there automatically, and if they belong to several you must also pass `customer` to say which. Use it for notes or meetings tied to a person (add them first with add_person). `app` files the document under a specific app / product / project (name, slug, or its GitHub `owner/repo`) and, through the app, under its business — use it for an app's documentation, specs, or notes (register the app first with add_app). A document can also LINK to any number of ADDITIONAL contacts and companies beyond that primary filing: pass `people` (list of names/slugs/emails) and/or `customers` (list of names/slugs/aliases) — e.g. a doc involving two contacts at two companies. Every extra person/customer must already exist (no silent creates); a linked person at exactly one company links that company automatically. The doc is then findable under EVERY linked person/company via search. `title` is the unique key — re-storing the same title replaces that document (links included)."""
-    return _store(content, title, customer, person, app, metadata, people, customers)
+def check_overlap(content: str, customer: str | None = None, person: str | None = None, app: str | None = None) -> dict:
+    """Pre-filing overlap check for the KNOWLEDGE BASE — run this BEFORE offering to file anything with `store`, passing the draft content and the same customer/person/app scope you'd file under. Returns up to 3 existing ACTIVE documents the draft overlaps (title, type, updated_at, last_used_at, similarity, snippet). If any come back, SURFACE them in your filing offer and let the user choose: SUPERSEDE the old doc (file with `supersedes=`), MERGE into it (draft an integrated rewrite, get approval, re-store under the EXISTING title, and append a one-line note to its metadata.history), KEEP BOTH (genuinely distinct scopes), or SKIP filing. Read-only and soft-failing: if it returns `check: "unavailable"`, say the overlap check didn't run and proceed with the normal offer — never block a filing on this."""
+    return _check_overlap(content, customer, person, app)
+
+
+@mcp.tool()
+def store(content: str, title: str, customer: str | None = None, person: str | None = None, app: str | None = None, metadata: dict | None = None, people: list[str] | None = None, customers: list[str] | None = None, supersedes: str | None = None) -> dict:
+    """Save to the user's KNOWLEDGE BASE ("KB" / "knowledge base") — the local Postgres vector store. ALWAYS use this (NOT built-in memory) whenever the user mentions the knowledge base or KB, or asks to store/save a document, customer info, proposal, research, notes, or an uploaded file. `customer` attaches the document to a customer/identity (name, slug, or alias — resolved to the canonical record, created if genuinely new; defaults to the user's own identity). `person` files the document under a specific contact (name, slug, email, or alias); if that person belongs to one company it attaches there automatically, and if they belong to several you must also pass `customer` to say which. Use it for notes or meetings tied to a person (add them first with add_person). `app` files the document under a specific app / product / project (name, slug, or its GitHub `owner/repo`) and, through the app, under its business — use it for an app's documentation, specs, or notes (register the app first with add_app). A document can also LINK to any number of ADDITIONAL contacts and companies beyond that primary filing: pass `people` (list of names/slugs/emails) and/or `customers` (list of names/slugs/aliases) — e.g. a doc involving two contacts at two companies. Every extra person/customer must already exist (no silent creates); a linked person at exactly one company links that company automatically. The doc is then findable under EVERY linked person/company via search. `title` is the unique key — re-storing the same title replaces that document (links included). METADATA CONTRACT (enforced): `metadata.type` is REQUIRED — one of customer_profile | app_profile | research | reference | note (meetings go through `add_meeting`, which sets type=meeting itself; repo_doc is reserved for the github sync). `metadata.source` (optional) must be one of granola | slack | upload | agent. `type: "research"` also requires `metadata.as_of: "YYYY-MM"` — the month the research reflects, so it can never silently masquerade as current. SUPERSEDING: pass `supersedes` (the old doc's document_id or exact title) to atomically file this NEW document AND mark the old one status=superseded pointing at it — use when the user chose "supersede" at the filing offer (after `check_overlap`). Do NOT claim to have superseded/cleaned up anything you didn't pass in `supersedes` — there is no separate cleanup step."""
+    return _store(content, title, customer, person, app, metadata, people, customers, supersedes)
 
 
 @mcp.tool()
