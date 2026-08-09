@@ -129,6 +129,22 @@ def meetings_block():
     return head + "".join(cards), len(cards)
 
 
+def split_tasks(now, open_tasks):
+    """Partition by task-date semantics: a task's date is the day the operator chose
+    to DO it, NOT a deadline. today / carried (past-dated, still open) / undated / future."""
+    today = now.date()
+    g = {"today": [], "carried": [], "undated": [], "future": []}
+    for t in open_tasks:
+        due = str(t.get("due") or "")[:10]
+        try:
+            d = datetime.date.fromisoformat(due)
+        except ValueError:
+            g["undated"].append(t)
+            continue
+        g["today" if d == today else ("carried" if d < today else "future")].append(t)
+    return g
+
+
 def digest_text(now, cal, mail, open_tasks, meeting_titles):
     L = [f"Today is {now.strftime('%A, %B %-d, %Y')}.", ""]
     L.append("CALENDAR (today):")
@@ -138,8 +154,18 @@ def digest_text(now, cal, mail, open_tasks, meeting_titles):
     L.append("UNREAD EMAIL (last 3 days):")
     L += [f"- {(m.get('from') or '?').split('<')[0].strip()}: {m.get('subject') or '(no subject)'}" for m in mail] or ["- (inbox clear)"]
     L.append("")
-    L.append("OPEN TASKS:")
-    L += [f"- {t.get('title') or '(untitled)'}" + (f" (due {str(t.get('due'))[:10]})" if t.get("due") else "") for t in open_tasks] or ["- (none)"]
+    g = split_tasks(now, open_tasks)
+    L.append("TASKS ASSIGNED TO TODAY ({{OPERATOR_FIRST_NAME}} chose today as the day to do these — dates are do-days, not deadlines):")
+    L += [f"- {t.get('title') or '(untitled)'}" for t in g["today"]] or ["- (none)"]
+    if g["carried"]:
+        L.append("CARRIED OVER (assigned to a past day, still open — one quiet mention at most, never a nag):")
+        L += [f"- {t.get('title') or '(untitled)'} (was for {str(t.get('due'))[:10]})" for t in g["carried"]]
+    if g["undated"]:
+        L.append("UNDATED TASKS (no day chosen — candidates only if today has room):")
+        L += [f"- {t.get('title') or '(untitled)'}" for t in g["undated"]]
+    if g["future"]:
+        L.append(f"({len(g['future'])} more task(s) are assigned to FUTURE days — withheld by design; "
+                 "they are already planned. Do NOT mention, count, or allude to them.)")
     if meeting_titles:
         L.append("")
         L.append("NEW MEETING REPORTS FILED:")
@@ -174,7 +200,10 @@ def synthesize(digest, now, audio_meetings):
         "most important thing, how the calendar/email/tasks connect, any deadline or risk, and what to prep. Then a "
         "short 'Today's focus' list of 2-4 concrete priorities, most important first. Be specific and reference real "
         "items; never invent anything not in the DATA. Connect items to each other only when the DATA itself links "
-        "them — never infer a relationship from similar names or titles. Sharp and useful — no greeting, no filler, "
+        "them — never infer a relationship from similar names or titles. TASK SEMANTICS: a task's date is the day "
+        "{{OPERATOR_FIRST_NAME}} chose to DO it, not a deadline — today's tasks are simply today's work (no urgency or deadline "
+        "framing), a carried-over item gets at most one quiet clause, and anything assigned to a future day is "
+        "none of today's business. Sharp and useful — no greeting, no filler, "
         "no sign-off.\n\n"
         "Output ONLY an HTML fragment wrapped EXACTLY between <!--BRIEF--> and <!--/BRIEF--> — no <html>/<body>, no "
         "markdown, no code fences. Use only <p>, <strong>, <ul>, <li>. Do NOT use any tools; write from the DATA only.\n\n"
@@ -183,8 +212,10 @@ def synthesize(digest, now, audio_meetings):
         "sentences ONLY — no HTML, no markdown, no bullets, no URLs, no emoji, no headings. It is a LIGHTER cut "
         "than the written brief, roughly 250-450 words: greet {{OPERATOR_FIRST_NAME}} with the day and date; say what today is "
         "really about; walk the calendar in order with times spoken as words (say 'ten thirty' not '10:30'); the "
-        "key tasks — work priorities first, and a trivial personal errand gets a few words at most, never "
-        "sentences of elaboration; anything notable in unread email, briefly; and for each new meeting report (these are YESTERDAY'S meetings — frame them that way, e.g. 'yesterday you met with…'), "
+        "today's "
+        "tasks — work priorities first, a trivial personal errand gets a few words at most, a carried-over item "
+        "at most one quiet sentence, and tasks assigned to future days are NEVER spoken of — they're planned, "
+        "leave them alone; anything notable in unread email, briefly; and for each new meeting report (these are YESTERDAY'S meetings — frame them that way, e.g. 'yesterday you met with…'), "
         "ONLY who it was with, when it was, and a one-to-two-sentence takeaway — never the full detail. Weight "
         "the airtime by importance: the day's real priorities get the words, small stuff gets a passing mention "
         "or nothing. Close with one short send-off line.\n\n"
@@ -236,7 +267,7 @@ def render_audio(script, now):
         return None
 
 
-def details_block(cal, mail, open_tasks):
+def details_block(now, cal, mail, open_tasks):
     def chip(label, n):
         return f'<span style="font:600 12px {FONT};color:{MUTED}">{label} <span style="color:{INK}">{n}</span></span>'
 
@@ -250,9 +281,20 @@ def details_block(cal, mail, open_tasks):
     mail_rows = "".join(row(f'<b>{esc((m.get("from") or "?").split("<")[0].strip()[:34])}</b> &mdash; '
                             f'{esc((m.get("subject") or "(no subject)")[:70])}') for m in mail) \
         or row(f'<span style="color:{FAINT}">Inbox clear.</span>')
-    task_rows = "".join(row(f'&#9744; {esc(t.get("title") or "(untitled)")}'
-                            + (f' <span style="color:#c0392b">· due {esc(str(t.get("due"))[:10])}</span>' if t.get("due") else ""))
-                        for t in open_tasks) or row(f'<span style="color:{FAINT}">All clear.</span>')
+    # grouped by do-day semantics: today first, then carried, undated, future (muted — already planned)
+    g = split_tasks(now, open_tasks)
+
+    def task_row(t, suffix=""):
+        return row(f'&#9744; {esc(t.get("title") or "(untitled)")}{suffix}')
+
+    task_rows = "".join(
+        [task_row(t) for t in g["today"]]
+        + [task_row(t, f' <span style="color:#c0392b">· carried from {esc(str(t.get("due"))[:10])}</span>')
+           for t in g["carried"]]
+        + [task_row(t, f' <span style="color:{FAINT}">· no date</span>') for t in g["undated"]]
+        + [task_row(t, f' <span style="color:{FAINT}">· {esc(str(t.get("due"))[:10])}</span>')
+           for t in g["future"]]
+    ) or row(f'<span style="color:{FAINT}">All clear.</span>')
 
     def grp(title, rows):
         return (f'<div style="margin:12px 0 0"><div style="font:700 12px {FONT};letter-spacing:.04em;'
@@ -281,7 +323,7 @@ def build_html(now, synthesis_html, meetings_html, cal, mail, open_tasks):
         f'<div style="font:13px {FONT};color:{FAINT};margin-bottom:16px">{now.strftime("%A, %B %-d")} &middot; your brief</div>'
         f'{brief_card}'
         f'{meetings_html}'
-        f'{details_block(cal, mail, open_tasks)}'
+        f'{details_block(now, cal, mail, open_tasks)}'
         f'<div style="color:{FAINT};font:11px {FONT};margin-top:24px;border-top:1px solid {LINE};padding-top:10px">{{AGENT_NAME}} &middot; synthesized by GPT-5.5 &middot; auto-generated</div>'
         f'</div>'
     )
