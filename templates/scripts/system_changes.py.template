@@ -21,6 +21,7 @@ Runs BEFORE the 3:15a backup so the snapshot commit rides the encrypted bundle.
 Smoke-test:  python system_changes.py
 """
 import datetime
+import html
 import json
 import os
 import re
@@ -144,25 +145,58 @@ def _mem_limits():
     return grab("user_char_limit", 1375), grab("memory_char_limit", 2200)
 
 
+_AUDIT_COLORS = {"contradiction": "#dc2626", "redundant": "#d97706",
+                 "expired": "#6b7280", "budget": "#7c3aed"}
+
+
+def _entry_sizes(txt):
+    """[(first-6-words label, chars)] per §-entry, largest first."""
+    sizes = [(" ".join(e.split()[:6]), len(e))
+             for e in (s.strip() for s in txt.split("§")) if e]
+    return sorted(sizes, key=lambda t: -t[1])
+
+
+def _audit_card(kind, title, rows):
+    """One finding as a compact card: colored left border, title, labeled detail rows.
+    All content is escaped here — model output never reaches the email unescaped."""
+    color = _AUDIT_COLORS.get(kind, "#d97706")
+    body = "".join(
+        f'<div style="font-size:12px;color:#57534e;margin-top:3px">'
+        f'<strong>{html.escape(label)}:</strong> {html.escape(text)}</div>'
+        for label, text in rows if text)
+    return (f'<div style="border-left:3px solid {color};padding:6px 10px;margin:10px 0;'
+            f'background:#fafaf9">'
+            f'<div style="font-size:13px;font-weight:600">'
+            f'<span style="color:{color};font-size:10px;letter-spacing:.05em">'
+            f'{html.escape(kind.upper())}</span> {html.escape(title)}</div>{body}</div>')
+
+
 def memory_audit():
     """Weekly CONTENT audit of built-in memory (USER.md / MEMORY.md) against SOUL.md.
     Flag-only, run from OUTSIDE the agent (an agent can't reliably notice its own
     memory is bad — the broken memory is what it thinks with). The daily ops-digest
     format/drift check stays separate; this one judges content: contradictions,
     entries redundant with a SOUL rule, time-expired entries, near-budget stores.
+    Each finding carries its own initial analysis (evidence + assessment + suggested
+    fix) so the digest section is actionable without a follow-up investigation.
     Writes memory-audit.html (findings fragment, may be empty) + memory-audit.meta.json.
-    Resolution path: the operator fixes via Hermes chat (memory writes are ungated) or backend."""
+    Resolution path: the operator decides every fix — via Hermes chat or the backend."""
     today = datetime.datetime.now().strftime("%Y-%m-%d")
     user_limit, mem_limit = _mem_limits()
-    findings = []
+    cards = []
     texts = {}
     for name, limit in (("USER.md", user_limit), ("MEMORY.md", mem_limit)):
         p = MEMORIES / name
         txt = p.read_text() if p.exists() else ""
         texts[name] = txt
         if txt and len(txt) >= 0.85 * limit:  # deterministic: budget proximity
-            findings.append(f"<li><strong>{name}</strong> is at {len(txt)}/{limit} chars "
-                            f"(&ge;85% of budget) — trim or raise the limit before writes start failing.</li>")
+            biggest = " · ".join(f"“{lbl}…” ({n})" for lbl, n in _entry_sizes(txt)[:5])
+            cards.append(_audit_card(
+                "budget",
+                f"{name} at {len(txt)}/{limit} chars ({len(txt) * 100 // limit}% of budget)",
+                [("Largest entries (chars)", biggest),
+                 ("Suggested fix", "trim/merge the largest entries, or raise the limit in "
+                                   "config.yaml — writes start failing at 100%")]))
     soul = SOUL.read_text() if SOUL.exists() else ""
     llm_ok = False
     if texts["USER.md"] or texts["MEMORY.md"]:
@@ -170,7 +204,7 @@ def memory_audit():
             "You are auditing an AI agent's two built-in memory files against its standing-rules "
             "file (SOUL.md). Entries are separated by '§'. FLAG ONLY, do not rewrite anything.\n\n"
             "Flag an entry ONLY if it clearly:\n"
-            "1. CONTRADICTS another memory entry (they can't both hold), or\n"
+            "1. CONTRADICTS another memory entry or a SOUL.md rule (they can't both hold), or\n"
             "2. RESTATES a rule already in SOUL.md (redundant — behavior rules live in SOUL, "
             "memory is for supporting facts; an entry ADDING detail beyond SOUL is fine), or\n"
             "3. IS TIME-EXPIRED (references a date/event now clearly past, framed as upcoming).\n\n"
@@ -178,24 +212,37 @@ def memory_audit():
             f"=== SOUL.md ===\n{soul}\n\n"
             f"=== USER.md ===\n{texts['USER.md']}\n\n"
             f"=== MEMORY.md ===\n{texts['MEMORY.md']}\n\n"
-            "Output between <!--MEMAUDIT--> and <!--/MEMAUDIT--> markers: one <li> per finding "
-            "(name the file, quote the first ~8 words of the entry, state the problem in one "
-            "clause), or exactly NONE if nothing qualifies. Be conservative — a wrong flag "
+            "Return STRICT JSON between <!--MEMAUDIT--> and <!--/MEMAUDIT--> markers, shaped:\n"
+            '{"findings": [{"file": "USER.md or MEMORY.md", '
+            '"type": "contradiction|redundant|expired", '
+            '"quote": "first ~12 words of the flagged entry", '
+            '"evidence": "the specific SOUL rule or conflicting entry it clashes with, '
+            'quoted (<=30 words)", '
+            '"assessment": "1-2 sentences: why it qualifies and what breaks if left in place", '
+            '"fix": "one actionable line, e.g. delete the entry / rewrite to keep only X / '
+            'promote to SOUL then delete"}]}\n'
+            "Use an empty findings list if nothing qualifies. Be conservative — a wrong flag "
             "wastes the operator's time."
         )
         try:
             r = subprocess.run([HERMES, "-z", prompt], capture_output=True, text=True, timeout=300)
             m = re.search(r"<!--MEMAUDIT-->(.*?)<!--/MEMAUDIT-->", r.stdout or "", re.S)
-            frag = re.sub(r"```html|```", "", (m.group(1) if m else "")).strip()
-            llm_ok = bool(m)
-            if frag and frag.upper() != "NONE" and "<li" in frag:
-                findings.extend(re.findall(r"<li[^>]*>.*?</li>", frag, re.S))
+            raw = re.sub(r"```json|```", "", (m.group(1) if m else "")).strip()
+            if raw:
+                data = json.loads(raw)
+                llm_ok = True
+                for f in data.get("findings", [])[:8]:
+                    cards.append(_audit_card(
+                        str(f.get("type") or "flag").lower(),
+                        f'{f.get("file", "?")} — “{str(f.get("quote", ""))[:120]}”',
+                        [("Evidence", str(f.get("evidence", ""))[:260]),
+                         ("Assessment", str(f.get("assessment", ""))[:340]),
+                         ("Suggested fix", str(f.get("fix", ""))[:180])]))
         except Exception as e:
             log(f"memory audit LLM step failed: {e}")
-    AUDIT_HTML.write_text(
-        f'<ul style="margin:6px 0 0 18px;padding:0">{"".join(findings)}</ul>' if findings else "")
-    AUDIT_META.write_text(json.dumps({"date": today, "findings": len(findings), "llm_ok": llm_ok}, indent=2))
-    log(f"memory audit: findings={len(findings)} llm_ok={llm_ok}")
+    AUDIT_HTML.write_text("".join(cards))
+    AUDIT_META.write_text(json.dumps({"date": today, "findings": len(cards), "llm_ok": llm_ok}, indent=2))
+    log(f"memory audit: findings={len(cards)} llm_ok={llm_ok}")
 
 
 def main():
