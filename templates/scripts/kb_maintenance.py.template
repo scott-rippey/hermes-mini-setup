@@ -15,17 +15,29 @@ Sections:
   3. Research aging      — research docs by as_of (a snapshot must not read as current)
   4. Contract violations — off-enum type/source (should be 0; server enforces on store)
   5. Near-duplicate pairs — active curated docs (not repo_doc/meeting) whose chunks
-     overlap ≥ SIM_FLOOR; GPT-5.5 (`hermes -z`) proposes merge-vs-distinct. Proposals only.
+     overlap ≥ SIM_FLOOR; the agent model (`hermes -z`) proposes merge-vs-distinct. Proposals only.
 
 Usage:  python kb_maintenance.py [--no-llm]
 Deterministic core via psql (same pattern as ops_digest); the only LLM step is
 the near-dup adjudication, skipped with --no-llm or when there are no candidates.
 """
 import datetime
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+def _agent_model_name():
+    """Current chat model from config.yaml (model.default, the first 'default:' in the file).
+    Footer/label use only — keeps emailed labels honest across model switches."""
+    try:
+        cfg = open(os.path.expanduser("~/.hermes/config.yaml")).read()
+        m = re.search(r"^\s*default:\s*(\S+)", cfg, re.M)
+        return m.group(1) if m else "the agent model"
+    except Exception:
+        return "the agent model"
+
 
 HOME = Path.home()
 PSQL = "/opt/homebrew/bin/psql"
@@ -170,7 +182,7 @@ def near_dups(no_llm):
     if no_llm:
         out += ["", "_(--no-llm: skipped merge-vs-distinct adjudication)_"]
     else:
-        out += ["", "**GPT-5.5 proposals (human decides):**", "", adjudicate(pairs)]
+        out += ["", (lambda: f"**{_agent_model_name()} proposals (human decides):**")(), "", adjudicate(pairs)]
     out += ["", "Resolve a MERGE via the gate primitives: draft the integrated rewrite, re-store",
             "under the surviving title, and supersede the other (`supersedes=` on store)."]
     return out

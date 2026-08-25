@@ -27,11 +27,23 @@ Smoke-test:  python ops_digest.py            (add --dry-run to skip the send)
 import datetime
 import html
 import json
+import os
 import re
 import subprocess
 import sys
 import urllib.request
 from pathlib import Path
+
+def _agent_model_name():
+    """Current chat model from config.yaml (model.default, the first 'default:' in the file).
+    Footer/label use only — keeps emailed labels honest across model switches."""
+    try:
+        cfg = open(os.path.expanduser("~/.hermes/config.yaml")).read()
+        m = re.search(r"^\s*default:\s*(\S+)", cfg, re.M)
+        return m.group(1) if m else "the agent model"
+    except Exception:
+        return "the agent model"
+
 
 HOME = Path.home()
 PY = str(HOME / ".hermes/hermes-agent/venv/bin/python")
@@ -677,7 +689,7 @@ def render(date_str, cron, sync_totals, total, by_source, by_model, kb, backup,
             H.append(f'<div style="font-size:13px;background:{CARD};border-left:3px solid {ACCENT};'
                      f'padding:10px 14px;border-radius:0 8px 8px 0;margin-bottom:8px">'
                      f'{syschanges["narrative_html"]}'
-                     f'<div style="color:{FAINT};font-size:10px;margin-top:6px">GPT-5.5 synthesis — '
+                     f'<div style="color:{FAINT};font-size:10px;margin-top:6px">{_agent_model_name()} synthesis — '
                      f'grounded in the diff below; anything not in the diff is omitted</div></div>')
         stat = html.escape(syschanges.get("diffstat", "")[:1800])
         H.append(f'<pre style="font:11px {MONO};color:{MUTED};background:{CARD};padding:10px 12px;'
@@ -738,7 +750,7 @@ def render(date_str, cron, sync_totals, total, by_source, by_model, kb, backup,
 
     H.append(f'<div style="margin-top:26px;padding-top:12px;border-top:1px solid {LINE};'
              f'color:{FAINT};font-size:11px">{{AGENT_NAME}} ops digest · deterministic facts '
-             f'(+ one labeled GPT-5.5 changes summary) · '
+             f'(+ one labeled model changes summary) · '
              f'{datetime.datetime.now().strftime("%Y-%m-%d %H:%M %Z")}</div>')
     H.append('</div>')
     return "".join(H)

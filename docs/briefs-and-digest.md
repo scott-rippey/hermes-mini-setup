@@ -2,6 +2,8 @@
 
 > Two morning emails with opposite personalities, by design: the **brief** (8:00) is *synthesized* — what today means; the **digest** (8:10) is *deterministic* — what the machine did. Both sent from the agent account to the operator (auto-allowed self-reporting).
 
+> **Model names in emailed output are dynamic:** footers and the digest's labeled synthesis card render `_agent_model_name()` — a per-script helper that reads `model.default` from config.yaml at send time. Never hard-code a model name into user-facing output; a model switch must not require a script scrub.
+
 ## Morning brief — 8:00 (`templates/scripts/morning_brief.py.template`)
 
 1. **Deterministic gather:** today's calendar (the operator's shared calendar), recent unread, open tasks — via the Google CLI.

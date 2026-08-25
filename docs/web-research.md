@@ -58,6 +58,8 @@ provider behind them:
    Ranked results plus a real fetched quote proves both `web_search` and
    `web_extract` are live.
 
+**Platform v0.20 note — disable the anonymous fallback ring:** newer platform versions ship `web.keyless_fallback: true` by default — if the keyed backend fails, searches silently reroute across five vendors' anonymous free tiers. Set **`web.keyless_fallback: false`** (default-deny: no never-discussed third-party endpoints, and a backend outage fails loudly in the digest instead of silently degrading).
+
 **Don't want another account?** DDGS (DuckDuckGo) is a keyless, free,
 *search-only* backend — but then `web_extract` has no provider and the agent can
 search but not read pages. The reference build uses Firecrawl for both.

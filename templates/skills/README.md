@@ -1,6 +1,6 @@
 # Skill templates — instantiation notes
 
-Five production skills, genericized. To install (Phase 7; `granola-meeting-reports` in Phase 8 if selected): fill `{{PLACEHOLDERS}}` in every text file (registry: `../README.md`), verify none remain (`grep -rn "{{" <skill>` must be empty), copy each folder to `~/.hermes/skills/productivity/<name>/`, confirm discovery with `hermes skills list`, restart the gateway, and smoke-test one flow per skill.
+Production skills, genericized. To install (Phase 7; `granola-meeting-reports` in Phase 8 if selected): fill `{{PLACEHOLDERS}}` in every text file (registry: `../README.md`), verify none remain (`grep -rn "{{" <skill>` must be empty), copy each folder to `~/.hermes/skills/productivity/<name>/`, confirm discovery with `hermes skills list`, restart the gateway, and smoke-test one flow per skill.
 
 | Skill | What it does | Note |
 |---|---|---|
@@ -9,6 +9,7 @@ Five production skills, genericized. To install (Phase 7; `granola-meeting-repor
 | `file-to-kb` | The offer-then-file gate for shared/uploaded documents | Scoping discipline lives here |
 | `deliverable-export` | Markdown → branded DOCX/PDF → scratch dir → optional email/KB | `reference.docx`/`deliverable.css` ship with a neutral deep-blue/teal look — recolor to the operator's brand if desired |
 | `granola-meeting-reports` | Nightly: meeting notes (via MCP) → structured KB record + `meetings` row + inline-HTML report in the next morning brief | Optional (Phase 8). Setup below — the one skill with an MCP dependency |
+| `email-triage` | On-demand "triage my inbox": deterministic gather (`scripts/triage_gather.py` — bulk/list/transactional excludes, KB Tier A vs new-person Tier B) → per-item gated reply DRAFTS into the operator's own Gmail Drafts | Needs `gmail.compose` on the read account (Phase 6 scopes) + `{{KB_DB_NAME}}`. Drafts-only is code-enforced — the skill can never send |
 
 `email_file.py` runs on the platform venv python (Google libs) and sends **from the agent account to the operator only** — any other recipient requires explicit approval, per SOUL.
 

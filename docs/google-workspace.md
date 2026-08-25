@@ -6,7 +6,7 @@
 
 | Token | Account | Scopes | Used for |
 |---|---|---|---|
-| `google_token_read.json` | **operator@your-domain** | `gmail.readonly`, `tasks.readonly` | Reading the operator's real inbox + to-dos (brief, prep, on-demand) |
+| `google_token_read.json` | **operator@your-domain** | `gmail.readonly`, `gmail.compose`, `tasks.readonly` | Reading the operator's real inbox + to-dos (brief, prep, on-demand) + creating **drafts in the operator's own Drafts folder** (`gmail draft-create` — the email-triage lane) |
 | `google_token.json` | **agent@your-domain** | `gmail.send`, `calendar.readonly`, `drive.file` | Sending email *as the agent*, reading the operator's **shared** calendar, writing Drive (backups) |
 
 Why split: reads against the operator's mailbox need their identity but **must not** be able to send as them; actions need an attributable, revocable identity that **cannot read their mail at all**. Either token revokes independently in one click. Bonus discipline: the agent's third-party signups (phone provider, research APIs) also live under the agent identity — its entire external footprint audits in one place.
@@ -17,7 +17,8 @@ Why split: reads against the operator's mailbox need their identity but **must n
 2. **GCP:** one project; OAuth consent **Internal** (Workspace-only — skips unverified-app friction; note it *rejects* personal-Gmail logins by design); a desktop OAuth client; secret to `~/.hermes/google_client_secret.json`.
 3. **Install the modified scripts** from [templates/google-workspace/](../templates/google-workspace/) over the bundled skill's — they add the per-op two-account routing, repeatable `--attach` + `--html` sending, and calendar attendees (meeting prep needs them).
 4. **Auth both lanes:** `setup.py --account read` (as the operator) and `--account send` (as the agent). Adding a scope later = re-auth that account.
-5. **Send policy** (SOUL + convention): `gmail.send` exists to email **the operator only** — deterministic self-reports are auto-allowed; any other recipient is per-item approval. Approved external sends **and replies auto-CC the operator**: `_ensure_owner_cc` (called by both the send and reply paths) appends their address whenever it isn't already in To/Cc, so the copy survives even if the agent forgets the SOUL rule.
+5. **Drafts policy (read account):** `gmail.compose` exists ONLY for `draft-create` — a draft in the operator's Drafts folder that THEY send. Google has no drafts-without-send scope (`compose` includes send), so drafts-only is enforced at the code layer: `google_api.py` implements **no send op on the operator@ path** (every send-type op is pinned to agent@ via `_SEND_OPS`). A send-as-operator would require a deliberate script edit.
+6. **Send policy** (SOUL + convention): `gmail.send` exists to email **the operator only** — deterministic self-reports are auto-allowed; any other recipient is per-item approval. Approved external sends **and replies auto-CC the operator**: `_ensure_owner_cc` (called by both the send and reply paths) appends their address whenever it isn't already in To/Cc, so the copy survives even if the agent forgets the SOUL rule.
 
 ## Auth gotchas (earned)
 

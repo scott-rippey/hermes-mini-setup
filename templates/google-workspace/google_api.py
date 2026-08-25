@@ -420,6 +420,32 @@ def gmail_send(args):
 
 
 
+def gmail_draft_create(args):
+    """Create a draft in the READ account's (the operator's own) Drafts folder.
+
+    Deliberately NOT a send path: this op is absent from _SEND_OPS so it uses the
+    operator@ token, and no send op exists on that account — google_api.py is the
+    enforcement layer for drafts-only, since Google's gmail.compose scope has no
+    drafts-without-send variant. No _ensure_owner_cc: the draft sits in the
+    operator's own mailbox; the CC rule governs actual outbound sends on agent@.
+    """
+    message = MIMEText(args.body, "html" if args.html else "plain")
+    message["To"] = args.to
+    message["Subject"] = args.subject
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+    msg_body = {"raw": raw}
+    if args.thread_id:
+        msg_body["threadId"] = args.thread_id
+    service = build_service("gmail", "v1")
+    result = service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
+    print(json.dumps({
+        "status": "draft_created",
+        "draft_id": result["id"],
+        "message_id": result.get("message", {}).get("id", ""),
+        "threadId": result.get("message", {}).get("threadId", ""),
+    }, indent=2))
+
+
 def gmail_reply(args):
     if _gws_binary():
         original = _run_gws(
@@ -1190,6 +1216,14 @@ def main():
     p.add_argument("--attach", action="append", default=[], metavar="PATH", help="File path to attach (repeatable)")
     p.add_argument("--thread-id", default="", help="Thread ID for threading")
     p.set_defaults(func=gmail_send)
+
+    p = gmail_sub.add_parser("draft-create", help="Create a draft in the operator's own Drafts folder (read account; never sends)")
+    p.add_argument("--to", required=True)
+    p.add_argument("--subject", required=True)
+    p.add_argument("--body", required=True)
+    p.add_argument("--html", action="store_true", help="Draft body as HTML")
+    p.add_argument("--thread-id", default="", help="Thread ID to attach the draft to (reply drafts)")
+    p.set_defaults(func=gmail_draft_create)
 
     p = gmail_sub.add_parser("reply")
     p.add_argument("message_id", help="Message ID to reply to")

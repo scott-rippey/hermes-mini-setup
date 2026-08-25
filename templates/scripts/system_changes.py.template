@@ -2,14 +2,14 @@
 # smoke-test by hand, THEN schedule via templates/launchd/. Placeholder registry: templates/README.md
 
 #!/usr/bin/env python3
-"""Nightly system-change snapshot + grounded GPT-5.5 analysis.
+"""Nightly system-change snapshot + grounded model analysis.
 
 ~/.hermes is a LOCAL-ONLY git repo (no remote; secrets gitignored) used purely
 as a change ledger. Each night at 3:05a this script:
 
   1. commits the day's changes ("auto: system snapshot ...")
   2. builds the last-24h diff, plus the ~/hermes-setup build-docs delta
-  3. has GPT-5.5 (headless `hermes -z`, Codex OAuth) write a SHORT
+  3. has the agent model (headless `hermes -z`, Codex OAuth) write a SHORT
      what-changed / what-we-built summary — HARD-GROUNDED: it may only restate
      what the diff shows; anything uncertain is omitted, and the raw diffstat
      is always rendered alongside it in the digest as the checkable truth
@@ -107,7 +107,7 @@ def collect(base):
 
 
 def narrative(facts):
-    """Grounded GPT-5.5 summary of the diff. Returns HTML fragment or ''."""
+    """Grounded model summary of the diff. Returns HTML fragment or ''."""
     prompt = (
         "You are {{AGENT_NAME}} writing the 'System changes' section of {{OPERATOR_FIRST_NAME}}'s daily ops digest.\n"
         "Below is your ONLY source of truth: the last-24h git changes of the Hermes system "

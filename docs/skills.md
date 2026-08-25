@@ -20,11 +20,13 @@ Enable/disable = the **`skills.disabled` list in `config.yaml`** + a gateway res
 | deliverable-export | this repo | Markdown → branded DOCX/PDF → scratch dir → optional email/KB |
 | file-to-kb | this repo | The offer-then-file gate for uploads; runs `check_overlap` before the offer and surfaces supersede/merge/keep-both, types per the enforced metadata enum |
 | proposal-esign | this repo | Optional: proposals out for e-signature via SignWell + the 15-min collection poller ([proposal-esign.md](proposal-esign.md)) |
+| email-triage | this repo | On-demand "triage my inbox": deterministic gather (bulk/list/transactional excludes + already-answered threads dropped, then KB-person Tier A vs new-person Tier B) → reply-worthiness judgment → per-item gated reply DRAFTS into the operator's own Gmail Drafts via `gmail draft-create` (**drafts-only enforced in code — the skill can never send**; needs the `gmail.compose` scope on the read account, [google-workspace.md](google-workspace.md)). On-demand only — no cron until it proves it merits proactivity |
 | meeting-reports | your build (optional) | The nightly meeting pipeline |
 | google-workspace | bundled **(modified — this repo ships the mods)** | All Google I/O |
 | telephony | official **(modified — see telephony-mods/)** | Outbound calls (optional) |
 | scrapling | official | Hard-page fallback to the built-in web tools (whose Firecrawl backend is wired in Phase 3 — see [web-research.md](web-research.md)) |
 | maps | bundled | OSM geocode/route — keyless; powers the travel fallback + live "route me from anywhere" asks |
+| grounded-citations | bundled (since platform v0.20) | Perplexity-style numbered citations — a ledger script owns the url→[n] mapping so citation numbers come from retrieval, never model memory; verbatim-quote fact-check chain for high-stakes claims. Fires for any sourced claim; the research persona is the main consumer |
 | docx | bundled (Anthropic, since platform v0.19) | Create/read/edit Word docs & templates — ad-hoc "fix this client doc" asks alongside deliverable-export's md→DOCX lane. Scripts run from their own dir (the `office` module resolves local imports that way) |
 | pdf | bundled (Anthropic, since platform v0.19) | Create/merge/split/**fill forms**/secure PDFs (pypdf + pdfplumber + pdf2image; needs poppler on PATH) |
 | xlsx | bundled (Anthropic, since platform v0.19) | Create/read/edit Excel/CSV — the build's only spreadsheet capability (openpyxl + a formula-recalc script) |

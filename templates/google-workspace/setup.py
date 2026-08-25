@@ -55,6 +55,10 @@ PENDING_AUTH_PATH = HERMES_HOME / "google_oauth_pending.json"
 SCOPES_BY_ACCOUNT = {
     "read": [  # operator@ — the data that needs direct access (no forwarding; Tasks can't be shared)
         "https://www.googleapis.com/auth/gmail.readonly",
+        # gmail.compose: draft-create ONLY at the code layer — Google has no
+        # drafts-without-send scope, so google_api.py deliberately implements no send op
+        # on this account; all sends stay on the agent@ token (auto-CC rule).
+        "https://www.googleapis.com/auth/gmail.compose",
         "https://www.googleapis.com/auth/tasks.readonly",
     ],
     "send": [  # agent@ — sends email, reads the operator's shared calendar, Drive for backups
