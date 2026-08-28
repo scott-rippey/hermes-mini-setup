@@ -635,7 +635,7 @@ def calendar_create(args):
     if _gws_binary():
         result = _run_gws(
             ["calendar", "events", "insert"],
-            params={"calendarId": args.calendar},
+            params={"calendarId": args.calendar, "sendUpdates": "all"},
             body=event,
         )
         print(json.dumps({
@@ -647,7 +647,9 @@ def calendar_create(args):
         return
 
     service = build_service("calendar", "v3")
-    result = service.events().insert(calendarId=args.calendar, body=event).execute()
+    # sendUpdates="all": Google only EMAILS the invite to attendees when asked —
+    # without it the event exists but no one is notified (silent-failure mode).
+    result = service.events().insert(calendarId=args.calendar, body=event, sendUpdates="all").execute()
     print(json.dumps({
         "status": "created",
         "id": result["id"],
@@ -659,12 +661,12 @@ def calendar_create(args):
 
 def calendar_delete(args):
     if _gws_binary():
-        _run_gws(["calendar", "events", "delete"], params={"calendarId": args.calendar, "eventId": args.event_id})
+        _run_gws(["calendar", "events", "delete"], params={"calendarId": args.calendar, "eventId": args.event_id, "sendUpdates": "all"})
         print(json.dumps({"status": "deleted", "eventId": args.event_id}))
         return
 
     service = build_service("calendar", "v3")
-    service.events().delete(calendarId=args.calendar, eventId=args.event_id).execute()
+    service.events().delete(calendarId=args.calendar, eventId=args.event_id, sendUpdates="all").execute()
     print(json.dumps({"status": "deleted", "eventId": args.event_id}))
 
 

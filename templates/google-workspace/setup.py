@@ -64,6 +64,10 @@ SCOPES_BY_ACCOUNT = {
     "send": [  # agent@ — sends email, reads the operator's shared calendar, Drive for backups
         "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/calendar.readonly",
+        # calendar.events: CREATE invites on the agent's OWN calendar as organizer
+        # (attendees get real Google invite emails via sendUpdates=all). Kept alongside
+        # calendar.readonly so shared-calendar reads keep working.
+        "https://www.googleapis.com/auth/calendar.events",
         "https://www.googleapis.com/auth/drive.file",
     ],
 }
