@@ -493,6 +493,36 @@ def gmail_draft_create(args):
     }, indent=2))
 
 
+def gmail_draft_update(args):
+    """Replace the message inside an EXISTING draft in the operator's Drafts folder.
+
+    Same drafts-only guarantee as draft-create (read account, no send op on this
+    path). Gmail has no partial-edit: drafts().update() swaps the whole message,
+    so callers pass the full revised body. Keeps ONE draft current instead of
+    littering the folder with near-duplicates when the operator iterates.
+    """
+    body_text = args.body
+    if not getattr(args, "no_signature", False):
+        body_text += _operator_signature(html=args.html)
+    message = MIMEText(body_text, "html" if args.html else "plain")
+    message["To"] = args.to
+    message["Subject"] = args.subject
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+    msg_body = {"raw": raw}
+    if args.thread_id:
+        msg_body["threadId"] = args.thread_id
+    service = build_service("gmail", "v1")
+    result = service.users().drafts().update(
+        userId="me", id=args.draft_id, body={"message": msg_body}
+    ).execute()
+    print(json.dumps({
+        "status": "draft_updated",
+        "draft_id": result["id"],
+        "message_id": result.get("message", {}).get("id", ""),
+        "threadId": result.get("message", {}).get("threadId", ""),
+    }, indent=2))
+
+
 def gmail_reply(args):
     if _gws_binary():
         original = _run_gws(
@@ -1274,6 +1304,16 @@ def main():
     p.add_argument("--thread-id", default="", help="Thread ID to attach the draft to (reply drafts)")
     p.add_argument("--no-signature", action="store_true", help="Omit the operator signature (default: appended)")
     p.set_defaults(func=gmail_draft_create)
+
+    p = gmail_sub.add_parser("draft-update", help="Replace the contents of an existing draft (never sends)")
+    p.add_argument("--draft-id", required=True, help="draft_id returned by draft-create/draft-update")
+    p.add_argument("--to", required=True)
+    p.add_argument("--subject", required=True)
+    p.add_argument("--body", required=True, help="FULL revised body (Gmail replaces the whole message)")
+    p.add_argument("--html", action="store_true", help="Draft body as HTML")
+    p.add_argument("--thread-id", default="", help="Thread ID (keep the same as the original draft)")
+    p.add_argument("--no-signature", action="store_true", help="Omit the operator signature (default: appended)")
+    p.set_defaults(func=gmail_draft_update)
 
     p = gmail_sub.add_parser("reply")
     p.add_argument("message_id", help="Message ID to reply to")
