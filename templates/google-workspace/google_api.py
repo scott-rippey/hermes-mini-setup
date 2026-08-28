@@ -355,9 +355,36 @@ def _ensure_owner_cc(message):
         message["Cc"] = _owner
 
 
+def _agent_signature_for(recipients: str, html: bool = False) -> str:
+    """The AGENT's own signature — appended to any outbound email that reaches
+    someone other than the operator. Deterministic twin of the SOUL identity rule
+    (same pattern as _ensure_owner_cc): recipients must never mistake the agent for
+    a human or for the operator, and that guarantee can't depend on the model
+    remembering to type one.
+
+    Operator-only mail gets nothing (self-reports don't need it). Create
+    HERMES_HOME/agent-signature.txt and .html during setup; they live outside the
+    skill dir so platform updates never touch them, and a missing file returns ""
+    rather than raising.
+    """
+    _owner = "{{OPERATOR_EMAIL}}"
+    addrs = [a.strip().lower() for a in recipients.replace(";", ",").split(",") if a.strip()]
+    if not addrs or all(_owner in a for a in addrs):
+        return ""
+    name = "agent-signature.html" if html else "agent-signature.txt"
+    try:
+        sig = (HERMES_HOME / name).read_text().rstrip("\n")
+    except Exception:
+        return ""
+    return ("<br><br>" + sig) if html else ("\n\n" + sig)
+
+
 def _compose_email(args):
     """Build a Gmail MIME message. Returns a multipart message when --attach is
     given (body + file attachments), otherwise a plain MIMEText (unchanged behavior)."""
+    body_text = args.body + _agent_signature_for(
+        f"{args.to},{getattr(args, 'cc', '')}", getattr(args, "html", False)
+    )
     attachments = getattr(args, "attach", None) or []
     if attachments:
         import mimetypes
@@ -365,7 +392,7 @@ def _compose_email(args):
         from email.mime.base import MIMEBase
         from email.mime.multipart import MIMEMultipart
         message = MIMEMultipart()
-        message.attach(MIMEText(args.body, "html" if args.html else "plain"))
+        message.attach(MIMEText(body_text, "html" if args.html else "plain"))
         for fp in attachments:
             path = Path(fp).expanduser()
             if not path.is_file():
@@ -378,7 +405,7 @@ def _compose_email(args):
             part.add_header("Content-Disposition", "attachment", filename=path.name)
             message.attach(part)
     else:
-        message = MIMEText(args.body, "html" if args.html else "plain")
+        message = MIMEText(body_text, "html" if args.html else "plain")
     message["To"] = args.to
     message["Subject"] = args.subject
     if getattr(args, "cc", ""):
@@ -483,7 +510,7 @@ def gmail_reply(args):
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
 
-        message = MIMEText(args.body)
+        message = MIMEText(args.body + _agent_signature_for(headers.get("from", "")))
         message["To"] = headers.get("from", "")
         message["Subject"] = subject
         if args.from_header:
@@ -513,7 +540,7 @@ def gmail_reply(args):
     if not subject.startswith("Re:"):
         subject = f"Re: {subject}"
 
-    message = MIMEText(args.body)
+    message = MIMEText(args.body + _agent_signature_for(headers.get("from", "")))
     message["To"] = headers.get("from", "")
     message["Subject"] = subject
     if args.from_header:
