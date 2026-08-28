@@ -420,6 +420,23 @@ def gmail_send(args):
 
 
 
+def _operator_signature(html: bool = False) -> str:
+    """The operator's own email signature, appended to drafts THEY will send.
+
+    Gmail only inserts a configured signature in its compose UI — a draft created
+    through the API arrives bare and would send bare. Create the files during setup:
+    HERMES_HOME/operator-signature.txt (plain) and .html (rich). They live outside
+    the skill dir so platform updates never touch them; a missing file just means
+    no signature, never an error.
+    """
+    name = "operator-signature.html" if html else "operator-signature.txt"
+    try:
+        sig = (HERMES_HOME / name).read_text().rstrip("\n")
+    except Exception:
+        return ""
+    return ("<br><br>" + sig) if html else ("\n\n" + sig)
+
+
 def gmail_draft_create(args):
     """Create a draft in the READ account's (the operator's own) Drafts folder.
 
@@ -429,7 +446,10 @@ def gmail_draft_create(args):
     drafts-without-send variant. No _ensure_owner_cc: the draft sits in the
     operator's own mailbox; the CC rule governs actual outbound sends on agent@.
     """
-    message = MIMEText(args.body, "html" if args.html else "plain")
+    body_text = args.body
+    if not getattr(args, "no_signature", False):
+        body_text += _operator_signature(html=args.html)
+    message = MIMEText(body_text, "html" if args.html else "plain")
     message["To"] = args.to
     message["Subject"] = args.subject
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
@@ -1225,6 +1245,7 @@ def main():
     p.add_argument("--body", required=True)
     p.add_argument("--html", action="store_true", help="Draft body as HTML")
     p.add_argument("--thread-id", default="", help="Thread ID to attach the draft to (reply drafts)")
+    p.add_argument("--no-signature", action="store_true", help="Omit the operator signature (default: appended)")
     p.set_defaults(func=gmail_draft_create)
 
     p = gmail_sub.add_parser("reply")
