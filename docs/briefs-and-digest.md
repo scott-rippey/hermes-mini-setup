@@ -29,7 +29,7 @@ Deterministic (no LLM) except ONE clearly-labeled section. Subject flips to ⚠�
 | **Memory stores** | A daily mirror of the memory tool's drift check (format round-trip + budgets + refused-write detection) — run from *outside* the agent |
 | **Memory content audit** | Only rendered when the weekly (Monday) audit has findings or errored: contradictions between memory entries, entries restating a SOUL rule, time-expired entries, near-budget stores (≥85%). Reads the `memory-audit.{html,meta.json}` artifact (≤8 days fresh) written by the change-narrative feeder — see [memory-system.md](memory-system.md) |
 | **Staged writes awaiting approval** | Only rendered when `~/.hermes/pending/*/` is non-empty: each staged item's subsystem, summary, origin, age. Informational — the q5m `pending-watch` job already pinged the ops channel when each landed |
-| Voice balance | Prepaid phone credit (if the module's on), warn thresholds |
+| Voice (Telnyx) | Prepaid carrier balance for the Vapi number (if the module's on; warn <$3, red <$1); Vapi credits aren't API-visible (dashboard auto-reload) |
 
 After the email sends, a **one-line headline posts to Slack `#system-messages`** ("✅ all systems green" / "⚠️ N failing — named rows"), and a send-failure of the digest email itself posts a 🔴 line — otherwise that failure is invisible until the *next* digest grades it. Full report stays in email; the channel is scannable history ([slack-gateway.md](slack-gateway.md) has the channel's full feed list). Dry-run skips the headline too.
 

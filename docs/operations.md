@@ -55,7 +55,7 @@ Update, then re-apply:
 | Symptom | Cause / fix |
 |---|---|
 | Digest "Memory stores" row red | Drift or a refused write — [memory-system.md](memory-system.md); never hand-fix by editing USER.md into doc form |
-| Phone API 403 / error 1010 | Cloudflare vs. the default Python UA — the UA patch is missing (reinstalled skill?) |
+| Vapi/Bland API 403 / error 1010 | Cloudflare vs. the default Python UA — the UA patch is missing (reinstalled skill?) |
 | `security add-generic-password` says "already exists" | A **blank** entry from a non-interactive attempt — delete it, re-run in a real Terminal |
 | Claude Code can't read Downloads/Desktop/Documents | macOS TCC — move the file to `~` or the repo |
 | Call rings straight to voicemail | Recipient's unknown-caller silencing — save the number to Contacts |

@@ -18,7 +18,8 @@ synthesis). Reports the last 24h of background activity:
   * Memory stores — USER.md / MEMORY.md §-round-trip + size vs config limits
                     (Hermes only checks at WRITE time and tells nobody — a jammed
                     store surfaces here instead of recycling as chat errors)
-  * Voice (Bland) — prepaid balance + total calls, so credit never dies mid-call
+  * Voice (Telnyx) — prepaid carrier balance, so the number's calling credit never dies mid-call
+    (Vapi's own credits have no API; auto-reload covers them)
 
 Rendered as a compact HTML email. Auto-allowed email-to-self cron (operator only).
 Scheduled via launchd `ai.hermes.ops-digest` ~8:10am ET (just after the brief).
@@ -525,25 +526,24 @@ def pending_approvals():
 # ----------------------------------------------------------------------------- voice balance
 
 def bland_balance():
-    """Prepaid Bland.ai credit — None if telephony isn't configured."""
+    """Prepaid Telnyx carrier credit (the Vapi number's telephony leg) — None if not configured."""
     try:
         env = (HOME / ".hermes" / ".env").read_text()
     except OSError:
         return None
-    m = re.search(r"^BLAND_API_KEY=(.+)$", env, re.M)
+    m = re.search(r"^TELNYX_API_KEY=(.+)$", env, re.M)
     if not m:
         return None
     try:
         req = urllib.request.Request(
-            "https://api.bland.ai/v1/me",
-            headers={"authorization": m.group(1).strip(),
+            "https://api.telnyx.com/v2/balance",
+            headers={"Authorization": f"Bearer {m.group(1).strip()}",
                      "User-Agent": "hermes-telephony/1.0"})
         with urllib.request.urlopen(req, timeout=15) as r:
             d = json.loads(r.read().decode())
-        return {"balance": d.get("billing", {}).get("current_balance"),
-                "calls": d.get("total_calls")}
+        return {"balance": d.get("data", {}).get("available_credit")}
     except Exception as e:
-        return {"balance": None, "calls": None, "error": str(e)[:80]}
+        return {"balance": None, "error": str(e)[:80]}
 
 
 # ----------------------------------------------------------------------------- system changes
@@ -733,9 +733,9 @@ def render(date_str, cron, sync_totals, total, by_source, by_model, kb, backup,
         H.append('</table>')
         H.append(f'<div style="font-size:12px;color:{FAINT};margin-top:4px">Review with /skills pending (or the matching subsystem queue).</div>')
 
-    # Voice (Bland) balance
+    # Voice (Telnyx carrier) balance
     if bland is not None:
-        H.append(section("Voice (Bland)"))
+        H.append(section("Voice (Telnyx)"))
         bal = bland.get("balance")
         if bal is None:
             H.append(f'<div style="font-size:13px;color:{FAINT}">Balance unavailable'
@@ -743,10 +743,9 @@ def render(date_str, cron, sync_totals, total, by_source, by_model, kb, backup,
         else:
             balf = float(bal)
             bal_color = BADC if balf < 1.0 else (WARN if balf < 3.0 else INK)
-            H.append(f'<div style="font-size:13px;color:{MUTED}">Prepaid balance '
+            H.append(f'<div style="font-size:13px;color:{MUTED}">Telnyx prepaid balance '
                      f'<span style="font:600 13px {MONO};color:{bal_color}">${balf:,.2f}</span>'
-                     f' · {fmt_int(bland.get("calls", 0))} total calls · ≈{int(balf / 0.14)} min '
-                     f'of talk time left at $0.14/min</div>')
+                     f' (carrier leg of the agent\'s number; Vapi credits auto-reload, not API-visible)</div>')
 
     H.append(f'<div style="margin-top:26px;padding-top:12px;border-top:1px solid {LINE};'
              f'color:{FAINT};font-size:11px">{{AGENT_NAME}} ops digest · deterministic facts '
@@ -785,7 +784,7 @@ def main(dry_run=False):
         print(f"[dry-run] {sess} sessions, any_fail={any_fail}, "
               f"backup={'yes' if backup else 'none'}, "
               f"mem={[f'{n}:{s}' for n, s, _ in memrows]}, "
-              f"bland={'$%.2f' % bland['balance'] if bland and bland.get('balance') is not None else 'n/a'}, "
+              f"telnyx={'$%.2f' % float(bland['balance']) if bland and bland.get('balance') is not None else 'n/a'}, "
               f"syschanges={'yes' if syschanges else 'none'}")
         return
 

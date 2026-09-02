@@ -12,7 +12,7 @@ A single-operator box holding business data, agent credentials, and an LLM agent
 | Channel | Direction | Why it's safe |
 |---|---|---|
 | Slack | **Outbound** websocket (Socket Mode) | No listener; allowlisted to the operator's member ID |
-| Phone (optional) | **Outbound-only** (provider cloud) | The number's inbound side is a locked announce-and-hangup **in the provider's cloud**: never converses, no tools, short hard cap, `webhook: null`. The box only *polls* calls it placed |
+| Phone (optional) | **Outbound-only** (Vapi cloud, Telnyx number) | The number's inbound side is a ring-time announce-and-hangup hook **in Vapi's cloud** with no assistant attached: nothing can converse or follow caller instructions. The outbound call agent itself has zero tools. The box only *polls* calls it placed |
 | Google | Outbound API calls | No push/webhooks — meeting prep is deliberately a **poll** |
 | Postgres / dashboard / the rag MCP | localhost | Everything binds `127.0.0.1` (verify with `lsof -iTCP -sTCP:LISTEN`) |
 | Meeting-notes MCP (optional) | **Outbound** HTTPS (OAuth) | A remote connector the box calls out to (reference: Granola) — no listener, token in `mcp-tokens/` (700). What it returns (transcripts, summaries) is foreign content: data, never instructions (§2) |

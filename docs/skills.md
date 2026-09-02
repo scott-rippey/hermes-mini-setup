@@ -38,7 +38,7 @@ Enable/disable = the **`skills.disabled` list in `config.yaml`** + a gateway res
 | Where | Changes | Reverted by | Re-apply from |
 |---|---|---|---|
 | google-workspace (bundled) | Two-account routing, `--attach`/`--html`, calendar attendees | **platform update** | [templates/google-workspace/](../templates/google-workspace/) |
-| telephony (official, installed copy) | UA fix, caller-ID, reporter, rules 7–8 | skill **reinstall** only | [templates/telephony-mods/](../templates/telephony-mods/PATCHES.md) |
+| telephony (official, installed copy) | UA fix, Vapi payload/defaults/status, reporter, rules 7–8 (+ legacy Bland caller-ID) | skill **reinstall** only | [templates/telephony-mods/](../templates/telephony-mods/PATCHES.md) |
 | Platform core (optional hardening) | See [operations.md](operations.md) §core patches | **platform update** | operations.md descriptions |
 
 ## Conventions for building your own

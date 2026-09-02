@@ -22,7 +22,7 @@ Operator ── Slack (persona channels) ── Socket Mode (outbound WS) ──
    │                                                     Hermes gateway (launchd,
    │                                                     KeepAlive, always on)
    ▼                                                              │
-phone (outbound-only, provider cloud)                 main model (flat-rate OAuth)
+phone (outbound-only, Vapi cloud + Telnyx number)     main model (flat-rate OAuth)
                                                       small aux model (web extract)
                                                               │
         ┌───────────────┬──────────────┬──────────────────────┤
@@ -44,7 +44,7 @@ phone (outbound-only, provider cloud)                 main model (flat-rate OAut
 
 - **Slack is the daily driver.** One bot, Socket Mode (an *outbound* websocket — no inbound listener), **allowlisted to the operator's member ID**. Channels = personas via `slack.channel_prompts` (the single canonical home for persona text): `#general` (chief of staff — SOUL itself), `#research` (present-then-file, KB-first), `#proposals-contracts` (playbook drafter — proposal AND contract modes, never sends). Inline replies.
 - **Dashboard** (localhost only) — live sessions and the command panel. **CLI/TUI** on the box for admin.
-- **Phone** (optional) — outbound-only; the number's inbound side is a locked announcement in the provider's cloud ([telephony.md](telephony.md)).
+- **Phone** (optional) — outbound-only via Vapi (call agent on `gpt-4.1`, your own ElevenLabs voice if you like) from a Telnyx number imported into Vapi ([telephony.md](telephony.md)). The number's inbound side is an announce-and-hangup hook in Vapi's cloud with no assistant; nothing phone-shaped can reach the box.
 - **Sessions reset daily at 4am** (or 24h idle) — every morning starts fresh, which is how SOUL/config changes land automatically.
 
 ## Data stores — one home per kind of fact
@@ -90,6 +90,6 @@ The 3:05 → 3:10 → 3:15 ordering is deliberate: ledger commit, then docs push
 
 ## Monitoring
 
-The morning **ops digest** is the system's daily self-exam: gateway process, every cron, docs-repo push state, platform-cron (reminders) watch, **memory-store drift checks**, KB growth, token telemetry, (optional) phone balance, and the system-changes narrative. **Silence is never assumed to be success** — every subsystem has a row.
+The morning **ops digest** is the system's daily self-exam: gateway process, every cron, docs-repo push state, platform-cron (reminders) watch, **memory-store drift checks**, KB growth, token telemetry, (optional) Telnyx voice-carrier balance, and the system-changes narrative. **Silence is never assumed to be success** — every subsystem has a row.
 
 **Same-moment layer — Slack `#system-messages`** (broadcast-only; `scripts/system_notify.sh` → `hermes send`, zero-token, works with the gateway down): gateway startups (hook — includes crash-recoveries), nightly-job failure pings at the moment of failure, and the digest's daily one-line headline. The digest remains the complete picture; the channel is the tap on the shoulder.
