@@ -17,6 +17,7 @@ the Slack post to our own channel. Run backgrounded right after placing a call:
 import argparse
 import datetime
 import html
+import os
 import re
 import subprocess
 import sys
@@ -43,9 +44,20 @@ POLL_S = 15
 RECORDING_GRACE_S = 180
 
 
+LOG_FILE = HOME / ".hermes/logs/call-reports.log"  # the ops digest reads this — always written, however we're launched
+
+
 def log(msg):
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{ts}] {msg}", flush=True)
+    line = f"[{ts}] {msg}"
+    print(line, flush=True)
+    try:  # skip the file write when stdout IS the log file (the SKILL.md nohup form) to avoid double lines
+        if not (LOG_FILE.exists() and os.fstat(1).st_ino == LOG_FILE.stat().st_ino):
+            LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with LOG_FILE.open("a") as f:
+                f.write(line + "\n")
+    except Exception:
+        pass
 
 
 def status(provider, call_id):
