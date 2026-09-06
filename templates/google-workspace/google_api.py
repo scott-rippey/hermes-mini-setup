@@ -464,6 +464,20 @@ def _operator_signature(html: bool = False) -> str:
     return ("<br><br>" + sig) if html else ("\n\n" + sig)
 
 
+def gmail_drafts(args):
+    """List the operator's Gmail Drafts (read account; metadata only, never sends)."""
+    service = build_service("gmail", "v1")
+    res = service.users().drafts().list(userId="me", maxResults=args.max).execute()
+    out = []
+    for d in res.get("drafts", []):
+        full = service.users().drafts().get(userId="me", id=d["id"], format="metadata").execute()
+        msg = full.get("message", {})
+        headers = _headers_dict(msg)
+        out.append({"id": d["id"], "messageId": msg.get("id", ""), "threadId": msg.get("threadId", ""), "to": headers.get("to", ""),
+                    "subject": headers.get("subject", ""), "date": headers.get("date", ""), "snippet": msg.get("snippet", "")})
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+
+
 def gmail_draft_create(args):
     """Create a draft in the READ account's (the operator's own) Drafts folder.
 
@@ -1295,6 +1309,10 @@ def main():
     p.add_argument("--attach", action="append", default=[], metavar="PATH", help="File path to attach (repeatable)")
     p.add_argument("--thread-id", default="", help="Thread ID for threading")
     p.set_defaults(func=gmail_send)
+
+    p = gmail_sub.add_parser("drafts", help="List the operator's Gmail Drafts (read account; never sends)")
+    p.add_argument("--max", type=int, default=10)
+    p.set_defaults(func=gmail_drafts)
 
     p = gmail_sub.add_parser("draft-create", help="Create a draft in the operator's own Drafts folder (read account; never sends)")
     p.add_argument("--to", required=True)
