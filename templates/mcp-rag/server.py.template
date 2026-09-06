@@ -449,7 +449,7 @@ def _add_meeting(content, title, meeting_id=None, meeting_date=None, meeting_typ
             "customers": res.get("customers"), "people": res.get("people")}
 
 
-def _search(query, customer=None, person=None, app=None, limit: int = 5) -> list[dict]:
+def _search(query, customer=None, person=None, app=None, limit: int = 5, bump: bool = True) -> list[dict]:
     """Hybrid retrieval: vector similarity + Postgres full-text (content_tsv/GIN),
     merged by reciprocal-rank fusion (k=60). FTS catches exact terms and proper
     nouns embeddings miss; RRF avoids cross-method score normalization. Both
@@ -564,7 +564,8 @@ def _search(query, customer=None, person=None, app=None, limit: int = 5) -> list
                  "match": "both" if (r[9] and r[10]) else ("vector" if r[9] else "keyword"),
                  "context": context,  # full_document | window (use get() for the rest)
                  "content": content})
-        _bump_usage(cur, [r["document_id"] for r in out])
+        if bump:  # agent retrievals count as usage; a human browsing from the console (bump=False) must not
+            _bump_usage(cur, [r["document_id"] for r in out])
     return out
 
 
