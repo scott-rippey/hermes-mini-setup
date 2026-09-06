@@ -14,6 +14,7 @@ Signed PDFs land in ~/{{AGENT_SLUG}}-outputs/. No email is sent — SignWell alr
 emails {{OPERATOR_FIRST_NAME}} the signed copy on completion.
 """
 import argparse
+import re
 import base64
 import json
 import os
@@ -25,7 +26,8 @@ from datetime import datetime, timezone
 
 API = "https://www.signwell.com/api/v1"
 STATE = os.path.expanduser("~/.hermes/signwell/pending.json")
-OUTDIR = os.path.expanduser("~/{{AGENT_SLUG}}-outputs")
+OUTPUTS = os.path.expanduser("~/{{AGENT_SLUG}}-outputs")
+OUTDIR = OUTPUTS
 HERMES = os.path.expanduser("~/.local/bin/hermes")
 # Requester identity on every send — used by SignWell for all email communications,
 # signing notifications, and the audit file (dashboard branding is Business-gated;
@@ -97,6 +99,8 @@ def cmd_send(args):
     items = load_state()
     items.append(entry)
     save_state(items)
+    # Auto-file (operator's standing decision): the drafting Markdown beside the PDF is filed under the customer as SENT.
+    entry["kb"] = file_to_kb(args.pdf, entry, status="sent")
     print(json.dumps({"sent": True, **entry, "status": doc.get("status")}, indent=2))
 
 
@@ -115,6 +119,33 @@ def cmd_status(args):
                            if isinstance(k, str) and k.endswith(("_at", "_time"))}}
                        for r in doc.get("recipients", [])],
     }, indent=2))
+
+
+KB_FILE = os.path.expanduser("~/.hermes/scripts/kb_file.py")
+
+
+def file_to_kb(pdf_path, entry, status, signed_pdf=None, signed_date=None):
+    """File the drafting Markdown (same basename as the PDF, in the outputs dir) into the KB. Never blocks the
+    send/poll: a missing Markdown or a store error is reported in the result for the agent/digest to surface."""
+    md = os.path.splitext(pdf_path)[0] + ".md"
+    if not os.path.isfile(md):
+        return {"ok": False, "error": f"drafting Markdown not found beside the PDF: {md}"}
+    if not entry.get("customer"):
+        return {"ok": False, "error": "no customer on the send record"}
+    kind = "contract" if re.search(r"contract|agreement", entry.get("doc_name", ""), re.I) else "proposal"
+    cmd = [KB_FILE, "--md", md, "--customer", entry["customer"], "--document-type", kind, "--status", status,
+           "--signwell-id", entry["id"], "--signer", f"{entry.get('recipient_name','')} <{entry.get('recipient_email','')}>",
+           "--sent-date", entry.get("sent_at", "")]
+    if signed_pdf: cmd += ["--signed-pdf", signed_pdf]
+    if signed_date: cmd += ["--signed-date", signed_date]
+    if entry.get("test_mode"): cmd.append("--test")
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        if r.returncode != 0:
+            return {"ok": False, "error": (r.stderr or r.stdout)[-400:]}
+        return json.loads(r.stdout.strip().splitlines()[-1])
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
 
 
 def download_signed(entry):
@@ -189,14 +220,17 @@ def _poll(args):
                 still_pending.append(entry)
                 results.append({**entry, "result": "completed_pdf_not_ready"})
                 continue
-            res = {**entry, "result": "signed", "signed_pdf": path}
+            signed_date = doc.get("updated_at")  # SignWell has no completed_at; for a Completed doc updated_at is the completion time
+            pdf_src = os.path.join(OUTPUTS, entry["doc_name"] + ".pdf")
+            kb = file_to_kb(pdf_src, entry, status="signed", signed_pdf=path, signed_date=signed_date)
+            res = {**entry, "result": "signed", "signed_pdf": path, "kb": kb}
             if args.notify:
+                filed = (f"Filed into the KB under *{entry.get('customer')}* as a signed {kb.get('result', {}).get('document_type', 'agreement') if isinstance(kb.get('result'), dict) else 'agreement'}."
+                         if kb.get("ok") else f":warning: NOT filed into the KB: {kb.get('error')} — file it by hand.")
                 msg = (f":writing_hand: *Signed:* {entry['doc_name']} — "
                        f"{entry['recipient_name']} <{entry['recipient_email']}> "
                        f"just completed signing. SignWell emailed {{OPERATOR_FIRST_NAME}} the signed "
-                       f"copy; local copy saved to {{AGENT_SLUG}}-outputs. "
-                       f"File it to the KB under *{entry.get('customer') or 'unscoped — ask {{OPERATOR_FIRST_NAME}}'}*? "
-                       f"Reply here to file or skip.")
+                       f"copy; local copy saved to {{AGENT_SLUG}}-outputs. {filed}")
                 res["notified_slack"] = notify_slack(msg)
             results.append(res)
         elif status in ("Declined", "Expired"):

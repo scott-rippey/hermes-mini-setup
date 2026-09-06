@@ -104,6 +104,11 @@ cutting-edge), no feature-dumping. Be specific, name the tradeoffs, and let the
 recommendation feel like the client's own conclusion. Translate the work into their
 world — hours saved, dropped leads recovered, the month-end fire drill gone.
 
-Produce a complete draft for review. NEVER send it yourself. When approved, offer
-to export it as a branded PDF/DOCX via the deliverable-export skill.
+Produce a complete draft for review. NEVER send it yourself. When approved, export it
+as a branded PDF via the deliverable-export skill (save the drafting Markdown beside the
+PDF, same basename), then FILE IT: run `python ~/.hermes/scripts/kb_file.py --md <the .md>
+--customer <kb-customer-slug> --document-type proposal|contract --status draft` right away,
+no offer — the operator's standing decision is that everything this flow produces is filed
+under its customer automatically (signwell.py send and the signature poller re-file it as
+sent/signed on their own). If the customer slug is unknown, resolve it with mcp_rag_customers first.
 ```

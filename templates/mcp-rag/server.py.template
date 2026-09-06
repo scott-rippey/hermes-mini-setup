@@ -76,6 +76,15 @@ _enc = tiktoken.get_encoding("cl100k_base")  # text-embedding-3-* tokenizer
 mcp = FastMCP("rag")
 
 
+def _announce(text: str) -> None:
+    """Best-effort one-liner to the ops Slack channel via scripts/system_notify.sh (zero-token); never raises."""
+    try:
+        import subprocess
+        subprocess.Popen([str(Path.home() / ".hermes" / "scripts" / "system_notify.sh"), text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 def _connect(autocommit: bool = True):
     conn = psycopg.connect(PG_DSN, autocommit=autocommit)
     register_vector(conn)
@@ -370,9 +379,12 @@ def _store(content, title, customer=None, person=None, app=None, metadata=None,
         for cid in link_customers:
             cur.execute("INSERT INTO document_customers (document_id, customer_id) VALUES (%s, %s)", (doc_id, cid))
         if old_doc:  # same transaction: the new doc lands AND the old one is superseded, or neither
-            cur.execute("UPDATE memory_documents SET status = 'superseded', superseded_by = %s WHERE id = %s",
+            cur.execute("UPDATE memory_documents SET status = 'superseded', superseded_by = %s, "
+                        "metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('superseded_at', now()) WHERE id = %s",
                         (doc_id, old_doc["id"]))
     result_supersede = {"superseded": old_doc["path"]} if old_doc else {}
+    if old_doc:  # a retirement is never silent: one line to the ops Slack channel (zero-token); the reference console reads the same fact from the DB
+        _announce(f":card_index_dividers: KB: *{old_doc['path']}* retired (superseded) by *{title}* under {cust['slug'] if cust else DEFAULT_CUSTOMER} — via {(metadata or {}).get('source', 'agent')}. History kept; only the new document is active.")
     return {**result_supersede, "document_id": str(doc_id), "title": title,
             "customer": cust["slug"] if cust else None,
             "person": person_row["slug"] if person_row else None,

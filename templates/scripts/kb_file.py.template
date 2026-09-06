@@ -1,0 +1,85 @@
+#!{{HOME}}/.hermes/mcp-rag/.venv/bin/python
+# TEMPLATE — replace {{PLACEHOLDERS}}, save to ~/.hermes/scripts/kb_file.py, chmod +x. Runs under the mcp-rag venv
+# (it imports the RAG server's _store, so embeddings + identity resolution + the metadata contract all apply).
+"""File a rendered deliverable (drafting Markdown) into the KB through the RAG server's own store.
+
+Sanctioned auto-KB-write (the operator's standing decision): everything the proposals/contracts flow produces is filed
+under its customer without an offer — at render (status=draft), at send (sent), at signature (signed).
+The title is the KB's unique key, so each stage RE-FILES the same title and the document is replaced in place.
+
+  kb_file.py --md <path.md> --customer <slug> --document-type proposal|contract --status draft|sent|signed
+             [--title "..."] [--signwell-id ID] [--signed-pdf PATH] [--signed-date ISO] [--signer "Name <email>"]
+             [--sent-date ISO] [--test] [--kind other-kind]   (--document-type free text when not proposal/contract)
+
+Metadata contract (server-enforced enum): type=reference; document_type / status / signed carry the specifics.
+SignWell text tags ([sig|req|signer1] …) are stripped from the filed content; a short header records the stage.
+"""
+import argparse, json, re, sys
+from datetime import date
+from pathlib import Path
+
+sys.path.insert(0, str(Path.home() / ".hermes" / "mcp-rag"))
+import server  # noqa: E402  (loads mcp-rag/.env, opens nothing until called)
+
+TAG = re.compile(r"\[(sig|date|text|init|check)\|[^\]]*\]", re.I)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--md", required=True)
+    ap.add_argument("--customer", required=True)
+    ap.add_argument("--document-type", required=True)
+    ap.add_argument("--status", required=True, choices=["draft", "sent", "signed"])
+    ap.add_argument("--title")
+    ap.add_argument("--signwell-id")
+    ap.add_argument("--signed-pdf")
+    ap.add_argument("--signed-date")
+    ap.add_argument("--sent-date")
+    ap.add_argument("--signer")
+    ap.add_argument("--test", action="store_true")
+    a = ap.parse_args()
+
+    md = Path(a.md).expanduser()
+    if not md.is_file() or md.suffix.lower() != ".md":
+        print(json.dumps({"ok": False, "error": f"not a Markdown file: {md}"})); return 2
+    body = TAG.sub("", md.read_text(encoding="utf-8")).strip()
+    m = re.search(r"^#\s+(.+)$", body, re.M)
+    title = (a.title or (m.group(1).strip() if m else md.stem)).strip()
+
+    meta = {"type": "reference", "source": "agent", "document_type": a.document_type, "status": a.status,
+            "signed": a.status == "signed", "source_path": str(md), "filed_on": date.today().isoformat()}
+    if a.signwell_id: meta["signwell_document_id"] = a.signwell_id
+    if a.signed_pdf: meta["signed_pdf_path"] = a.signed_pdf
+    if a.signed_date: meta["signed_date"] = a.signed_date
+    if a.sent_date: meta["sent_date"] = a.sent_date
+    if a.signer:
+        sm = re.match(r"^(.*?)\s*<([^>]+)>\s*$", a.signer)
+        meta["signer_name"], meta["signer_email"] = (sm.group(1).strip(), sm.group(2).strip()) if sm else (a.signer, "")
+    if a.test: meta["test"] = True
+
+    stage = {"draft": "DRAFT — rendered, not yet sent", "sent": "SENT for signature", "signed": "SIGNED"}[a.status]
+    header = [f"> **{a.document_type.title()} · {stage}**"]
+    if a.signwell_id: header.append(f"> SignWell document: `{a.signwell_id}`")
+    if a.signed_pdf: header.append(f"> Signed PDF: `{a.signed_pdf}`")
+    if a.signed_date: header.append(f"> Signed: {a.signed_date}")
+    if a.sent_date: header.append(f"> Sent: {a.sent_date}")
+    content = "\n".join(header) + "\n\n" + body
+
+    # Stage progression keeps history: "<title> [draft]" → "[sent]" → "[signed]"; the previous stage is superseded (retired, kept), never overwritten.
+    base = re.sub(r"\s*\[(draft|sent|signed)\]$", "", title).strip()
+    staged = f"{base} [{a.status}]"
+    prev = None
+    with server._connect() as conn:
+        rows = conn.execute(
+            "select d.id, d.path from memory_documents d join customers c on c.id = d.customer_id "
+            "where c.slug = %s and d.status = 'active' and d.metadata->>'document_type' = %s and (d.path = %s or d.path like %s) and d.path <> %s",
+            (a.customer, a.document_type, base, base + " [%", staged)).fetchall()
+    if rows:
+        prev = str(rows[0][0])
+    res = server._store(content, staged, a.customer, None, None, meta, None, None, prev)
+    print(json.dumps({"ok": True, "title": staged, "customer": a.customer, "status": a.status, "superseded": rows[0][1] if rows else None, "result": res}, default=str))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
