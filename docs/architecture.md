@@ -27,7 +27,7 @@ phone (outbound-only, Vapi cloud + Telnyx number)     main model (flat-rate OAut
                                                               │
         ┌───────────────┬──────────────┬──────────────────────┤
         ▼               ▼              ▼                      ▼
-   Postgres KB      state.db       memories/           10 launchd jobs
+   Postgres KB      state.db       memories/           12 launchd jobs
    (pgvector, via   (sessions,    (USER.md/MEMORY.md,  (schedule below)
    the mcp-rag      searchable)    §-entry format)
    MCP server)
@@ -57,7 +57,7 @@ phone (outbound-only, Vapi cloud + Telnyx number)     main model (flat-rate OAut
 
 KB scoping: the operator's own slug · `general` (non-customer research) · else per-customer — **every store names its scope explicitly**.
 
-## Automation — 10 launchd jobs
+## Automation — 12 launchd jobs
 
 | Job | When | What |
 |---|---|---|
@@ -70,6 +70,8 @@ KB scoping: the operator's own slug · `general` (non-customer research) · else
 | github-docs-sync | 9:00p | Customer app docs → KB (optional; read-only PATs, no AI) |
 | meeting-reports | 10:00p | Meeting-notes pipeline (optional) |
 | meeting-prep | every 15m | Poll: meeting ~2h out → prep email (+ traffic-aware "leave by") |
+| email-triage | every 15m | Poll the operator's inbox: new real-person mail → reply drafts auto-placed in their Gmail Drafts + home-channel summary; silent/zero-token when nothing is new ([skills.md](skills.md)) |
+| agent-inbox | hourly | Poll the agent's own inbox: new mail → one-line summaries to the home channel, replies to the agent flagged ([google-workspace.md](google-workspace.md)) |
 | signwell-poll | every 15m | Poll pending e-signatures (optional) → signed PDF + #proposals-contracts file-ask ([proposal-esign.md](proposal-esign.md)) |
 
 The 3:05 → 3:10 → 3:15 ordering is deliberate: ledger commit, then docs push, then the encrypted bundle — all three nightly captures agree.

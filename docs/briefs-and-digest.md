@@ -19,7 +19,7 @@ Deterministic (no LLM) except ONE clearly-labeled section. Subject flips to ⚠�
 
 | Section | What it checks |
 |---|---|
-| Cron health | The **gateway process** + every job from its log: backup, meeting pipeline, docs-sync, brief, **the 15-min prep poller (staleness >35m = FAIL)**, per-call report outcomes, **the 15-min e-signature poller (optional; staleness + end-of-run marker; row gated on the skill dir)**, and yesterday's own digest |
+| Cron health | The **gateway process** + every job from its log: backup, meeting pipeline, docs-sync, brief, **the 15-min prep poller (staleness >35m = FAIL)**, **the 15-min email-triage poller (same rule; row gated on its plist)**, **the hourly agent-inbox poller (staleness >75m = FAIL; row gated on its plist)**, per-call report outcomes, **the 15-min e-signature poller (optional; staleness + end-of-run marker; row gated on the skill dir)**, and yesterday's own digest |
 | **Platform cron (reminders)** | State-based watch on `~/.hermes/cron/jobs.json` (the agent-created reminder store — see [architecture.md](architecture.md)): empty or pending one-shots (named) ⇒ OK; **any RECURRING job ⇒ FAIL** (the one-shot-only rule was bypassed); a reminder in error state ⇒ FAIL. Self-activating — no artifact gate (an absent file = OK/empty) |
 | **Docs repo push** | State-based: no upstream / unpushed commits / uncommitted files ⇒ FAIL |
 | Agent activity | Sessions, tool calls, tokens (the real signal on a flat-rate plan; est-cost is a footnote) |

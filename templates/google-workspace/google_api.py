@@ -1284,6 +1284,9 @@ def tasks_list(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Google Workspace API for Hermes Agent")
+    parser.add_argument("--account", choices=["read", "send"], default=None,
+                        help="Override the per-op token routing. `--account send` before a gmail read op "
+                             "reads the AGENT's own mailbox (needs gmail.readonly on that token).")
     sub = parser.add_subparsers(dest="service", required=True)
 
     # --- Gmail ---
@@ -1486,6 +1489,8 @@ def main():
     # reads via the operator@ token. Selected per-invocation; consumed by get_credentials().
     global _ACTIVE_ACCOUNT
     _ACTIVE_ACCOUNT = "send" if (args.service, getattr(args, "action", None)) in _SEND_OPS else "read"
+    if args.account:
+        _ACTIVE_ACCOUNT = args.account
     args.func(args)
 
 

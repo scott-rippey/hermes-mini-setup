@@ -63,6 +63,9 @@ SCOPES_BY_ACCOUNT = {
     ],
     "send": [  # agent@ — sends email, reads the operator's shared calendar, Drive for backups
         "https://www.googleapis.com/auth/gmail.send",
+        # gmail.readonly: the agent reads its OWN inbox so the hourly `agent_inbox.py`
+        # watch (and `--account send gmail search` on demand) can report new mail to the operator.
+        "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/calendar.readonly",
         # calendar.events: CREATE invites on the agent's OWN calendar as organizer
         # (attendees get real Google invite emails via sendUpdates=all). Kept alongside

@@ -9,7 +9,7 @@ Production skills, genericized. To install (Phase 7; `granola-meeting-reports` i
 | `file-to-kb` | The offer-then-file gate for shared/uploaded documents | Scoping discipline lives here |
 | `deliverable-export` | Markdown → branded DOCX/PDF → scratch dir → optional email/KB | `reference.docx`/`deliverable.css` ship with a neutral deep-blue/teal look — recolor to the operator's brand if desired |
 | `granola-meeting-reports` | Nightly: meeting notes (via MCP) → structured KB record + `meetings` row + inline-HTML report in the next morning brief | Optional (Phase 8). Setup below — the one skill with an MCP dependency |
-| `email-triage` | On-demand "triage my inbox": deterministic gather (`scripts/triage_gather.py` — bulk/list/transactional excludes, KB Tier A vs new-person Tier B) → per-item gated reply DRAFTS into the operator's own Gmail Drafts | Needs `gmail.compose` on the read account (Phase 6 scopes) + `{{KB_DB_NAME}}`. Drafts-only is code-enforced — the skill can never send |
+| `email-triage` | On-demand "triage my inbox" + the 15-min cron (`templates/scripts/email_triage_cron.py.template` — auto-places reply drafts in the operator's Drafts, posts one home-channel summary, silent when nothing is new): deterministic gather (`scripts/triage_gather.py` — bulk/list/transactional excludes, KB Tier A vs new-person Tier B) → per-item gated reply DRAFTS into the operator's own Gmail Drafts | Needs `gmail.compose` on the read account (Phase 6 scopes) + `{{KB_DB_NAME}}`. Drafts-only is code-enforced — the skill can never send |
 
 `email_file.py` runs on the platform venv python (Google libs) and sends **from the agent account to the operator only** — any other recipient requires explicit approval, per SOUL.
 

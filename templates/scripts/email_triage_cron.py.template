@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+# TEMPLATE — replace {{PLACEHOLDERS}} from setup/answers.md, save to ~/.hermes/scripts/,
+# smoke-test by hand (--dry-run), THEN schedule via templates/launchd/. Placeholder registry: templates/README.md
+"""Proactive inbox triage (15-min launchd poll, `ai.hermes.email-triage`).
+
+The scheduled half of the email-triage skill. Every run:
+  1. gather  — the skill's own deterministic script (bulk excludes, KB Tier A / new-person
+               Tier B, read-account token only). Nothing hand-scanned.
+  2. dedupe  — message ids already surfaced (state file, 14-day memory) are dropped.
+               Nothing new -> one log line, no model call, no Slack post. Zero tokens.
+  3. context — for each NEW item: the full message body, the thread so far, recent
+               history with that sender, and (Tier A) the person's KB docs.
+  4. judge   — ONE agent-model call writes, per item, a verdict (needs {{OPERATOR_FIRST_NAME}} / FYI) and,
+               when a reply is warranted, the reply text in the operator's voice.
+  5. draft   — reply-verdict items are placed straight into the operator's own Gmail Drafts
+               (`gmail draft-create`, operator compose token — drafts-only is enforced in
+               google_api.py, there is no send op on that account). the operator's
+               design: the scheduled run auto-places drafts because he's not in the loop
+               live; he edits in Gmail or asks the agent in Slack to `draft-update`.
+  6. post    — one Slack message to the home Slack channel (SLACK_HOME_CHANNEL) via `hermes send`
+               listing what's waiting. Nothing here can send email.
+
+Log: one `[stamp] ...` line per run (the digest grades staleness + the last line).
+"""
+import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+from email.utils import parseaddr
+from pathlib import Path
+
+HOME = Path.home()
+PY = str(HOME / ".hermes/hermes-agent/venv/bin/python")
+HERMES = str(HOME / ".local/bin/hermes")
+GATHER = str(HOME / ".hermes/skills/productivity/email-triage/scripts/triage_gather.py")
+GAPI = str(HOME / ".hermes/skills/productivity/google-workspace/scripts/google_api.py")
+PSQL = "/opt/homebrew/bin/psql"
+PGDATABASE = "{{KB_DB_NAME}}"
+STATE_FILE = HOME / ".hermes/scripts/.email_triage_state.json"
+STATE_DAYS = 14
+GATHER_DAYS = 2
+MAX_NEW_PER_RUN = 6          # more than this = a burst; the rest surface next run
+BODY_CHARS = 2500
+OWNER = "{{OPERATOR_EMAIL}}"
+
+sys.path.insert(0, str(HOME / ".hermes/skills/productivity/google-workspace/scripts"))
+import google_api  # noqa: E402  (read account is its import-time default)
+
+
+def log(msg):
+    print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M %Z')}] {msg}", flush=True)
+
+
+# ----------------------------------------------------------------------------- state
+
+def load_state():
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except Exception:
+        return {"surfaced": {}}
+
+
+def save_state(state):
+    cutoff = (datetime.datetime.now(datetime.timezone.utc)
+              - datetime.timedelta(days=STATE_DAYS)).isoformat()
+    state["surfaced"] = {k: v for k, v in state["surfaced"].items() if v >= cutoff}
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, indent=1))
+    tmp.replace(STATE_FILE)
+
+
+# ----------------------------------------------------------------------------- gather
+
+def gather():
+    r = subprocess.run([PY, GATHER, "--days", str(GATHER_DAYS)],
+                       capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        raise RuntimeError(f"gather failed: {(r.stderr or r.stdout).strip()[-300:]}")
+    return json.loads(r.stdout)
+
+
+# ----------------------------------------------------------------------------- context
+
+def pg(query, **params):
+    cmd = [PSQL, "-d", PGDATABASE, "-At", "-F", "\x1f", "-R", "\x1e"]
+    for k, v in params.items():
+        cmd += ["-v", f"{k}={v}"]
+    try:
+        r = subprocess.run(cmd, input=query, capture_output=True, text=True, timeout=30)
+    except Exception:
+        return []
+    if r.returncode != 0:
+        return []
+    return [row.split("\x1f") for row in r.stdout.split("\x1e") if row.strip()]
+
+
+def kb_docs(person_id):
+    """Active KB docs filed under the person, linked to them, or under their companies."""
+    rows = pg(
+        "SELECT d.path, d.metadata->>'type', to_char(d.updated_at, 'YYYY-MM-DD'), left(d.content, 400) "
+        "FROM memory_documents d WHERE d.status='active' AND ("
+        "d.person_id = :'pid'::uuid "
+        "OR EXISTS (SELECT 1 FROM document_people dp WHERE dp.document_id=d.id AND dp.person_id=:'pid'::uuid) "
+        "OR d.customer_id IN (SELECT customer_id FROM customer_people WHERE person_id=:'pid'::uuid)) "
+        "ORDER BY d.updated_at DESC LIMIT 3",
+        pid=person_id,
+    )
+    return [f"- [{r[1]} {r[2]}] {r[0]}: {r[3].replace(chr(10), ' ')}" for r in rows if len(r) == 4]
+
+
+def _hdr(msg):
+    return {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
+
+
+def _clean(text):
+    text = re.sub(r"<[^>]+>", " ", text)           # html tags if only html came back
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n", text)
+    return text.strip()
+
+
+def context_for(service, rec):
+    """Body + thread-so-far + sender history (+ KB docs for Tier A). Plain text block."""
+    parts = []
+    msg = service.users().messages().get(userId="me", id=rec["message_id"], format="full").execute()
+    body = _clean(google_api._extract_message_body(msg))[:BODY_CHARS]
+    parts.append(f"MESSAGE BODY:\n{body or '(empty body)'}")
+
+    th = service.users().threads().get(userId="me", id=rec["thread_id"], format="metadata",
+                                       metadataHeaders=["From", "Date", "Subject"]).execute()
+    earlier = [m for m in th.get("messages", []) if m["id"] != rec["message_id"]]
+    if earlier:
+        lines = []
+        for m in earlier[-5:]:
+            h = _hdr(m)
+            lines.append(f"- {h.get('date', '')[:22]} from {parseaddr(h.get('from', ''))[1]}: {m.get('snippet', '')[:160]}")
+        parts.append("THREAD SO FAR (before this message):\n" + "\n".join(lines))
+
+    em = rec["from_email"]
+    hist = service.users().messages().list(
+        userId="me", q=f"(from:{em} OR to:{em}) -in:chats", maxResults=8).execute().get("messages", [])
+    lines = []
+    for m in hist:
+        if m.get("threadId") == rec["thread_id"]:
+            continue
+        mm = service.users().messages().get(userId="me", id=m["id"], format="metadata",
+                                            metadataHeaders=["From", "Date", "Subject"]).execute()
+        h = _hdr(mm)
+        who = "{{OPERATOR_FIRST_NAME}}" if parseaddr(h.get("from", ""))[1].lower() == OWNER else rec["from_name"]
+        lines.append(f"- {h.get('date', '')[:22]} {who}: {h.get('subject', '')[:80]} — {mm.get('snippet', '')[:140]}")
+        if len(lines) >= 5:
+            break
+    parts.append("RECENT HISTORY WITH THIS SENDER (other threads):\n" + ("\n".join(lines) if lines else "- none found"))
+
+    if rec.get("kb"):
+        docs = kb_docs(rec["kb"]["person_id"])
+        parts.append("KB DOCS FOR THIS PERSON / THEIR COMPANIES:\n" + ("\n".join(docs) if docs else "- none"))
+    return "\n\n".join(parts)
+
+
+# ----------------------------------------------------------------------------- judge
+
+def judge(items):
+    """One agent-model call. Returns list of dicts {n, verdict, what, reply} or None on failure."""
+    blocks = []
+    for i, it in enumerate(items, 1):
+        who = (f"{it['kb']['name']} ({it['kb']['companies'] or 'KB person'})"
+               if it.get("kb") else f"{it['from_name']} <{it['from_email']}> — NOT in the KB (new person)")
+        blocks.append(f"=== ITEM {i} ===\nFROM: {who}\nSUBJECT: {it['subject']}\nDATE: {it['date']}\n\n{it['_context']}")
+    prompt = (
+        "You are {{AGENT_NAME}} triaging the operator's inbox. For EACH item below decide whether it needs the operator's reply. "
+        "Be honest — 'FYI' is a fine verdict; do not manufacture replies for things that need none. "
+        "When a reply IS warranted, write the reply {{OPERATOR_FIRST_NAME}} would send: mirror how he writes to this person from "
+        "the history (register, greeting, sign-off), direct and warm and brief, shorter when in doubt. "
+        "Reference only real facts from the item's data; never invent names, dates, prices or history. "
+        "Do NOT type a signature — it is appended automatically. Do NOT use any tools.\n\n"
+        "Output ONLY a JSON array wrapped EXACTLY between <!--TRIAGE--> and <!--/TRIAGE-->, one object per item, "
+        "in order: {\"n\": <item number>, \"verdict\": \"reply\" | \"fyi\", "
+        "\"what\": \"<one line: what they want / why it matters, max 25 words>\", "
+        "\"reply\": \"<the proposed reply text, or empty string when verdict is fyi>\"}\n\n"
+        + "\n\n".join(blocks)
+    )
+    env = {**os.environ, "HOME": str(HOME),
+           "PATH": "/opt/homebrew/bin:" + str(HOME / ".local/bin") + ":" + str(HOME / ".hermes/bin")
+                   + ":/usr/bin:/bin:/usr/sbin:/sbin"}
+    try:
+        r = subprocess.run([HERMES, "-z", prompt], capture_output=True, text=True, timeout=300, env=env)
+    except Exception as e:
+        log(f"judge call failed: {e}")
+        return None
+    m = re.search(r"<!--TRIAGE-->(.*?)<!--/TRIAGE-->", r.stdout or "", re.S)
+    if not m:
+        log("judge returned no TRIAGE block")
+        return None
+    raw = re.sub(r"```json|```", "", m.group(1)).strip()
+    try:
+        out = json.loads(raw)
+        return out if isinstance(out, list) else None
+    except Exception:
+        log("judge returned unparseable JSON")
+        return None
+
+
+# ----------------------------------------------------------------------------- draft
+
+def place_draft(it, reply_text):
+    """Reply draft into the operator's Drafts folder on the thread. Returns draft_id or None."""
+    subject = it["subject"] if it["subject"].lower().startswith("re:") else f"Re: {it['subject']}"
+    to = f"{it['from_name']} <{it['from_email']}>" if it["from_name"] != it["from_email"] else it["from_email"]
+    try:
+        r = subprocess.run([PY, GAPI, "gmail", "draft-create", "--to", to, "--subject", subject,
+                            "--thread-id", it["thread_id"], "--body", reply_text],
+                           capture_output=True, text=True, timeout=120)
+        out = json.loads(r.stdout)
+        return out.get("draft_id") if out.get("status") == "draft_created" else None
+    except Exception as e:
+        log(f"draft-create failed for thread {it['thread_id']}: {e}")
+        return None
+
+
+# ----------------------------------------------------------------------------- post
+
+def _dotenv(key):
+    try:
+        for line in (HOME / ".hermes/.env").read_text().splitlines():
+            if line.startswith(key + "="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+
+def format_post(items, verdicts, excluded_total):
+    by_n = {v.get("n"): v for v in (verdicts or []) if isinstance(v, dict)}
+    drafted = sum(1 for it in items if it.get("_draft_id"))
+    lines = [f"📬 *Inbox triage — {len(items)} new item{'s' if len(items) != 1 else ''}"
+             + (f", {drafted} reply draft{'s' if drafted != 1 else ''} waiting in your Gmail Drafts*" if drafted else "*")]
+    for i, it in enumerate(items, 1):
+        who = (f"{it['kb']['name']} · {it['kb']['companies']}" if it.get("kb")
+               else f"{it['from_name']} <{it['from_email']}> · new person, not in KB")
+        v = by_n.get(i)
+        lines.append("")
+        lines.append(f"*{i}. {who}* — _{it['subject'][:90]}_")
+        if v:
+            tag = "🟠 needs your reply" if v.get("verdict") == "reply" else "⚪ FYI"
+            lines.append(f"{tag} — {v.get('what', '').strip()}")
+            if v.get("verdict") == "reply" and v.get("reply", "").strip():
+                if it.get("_draft_id"):
+                    lines.append(f"✅ Draft placed in your Gmail Drafts (`draft {it['_draft_id']}`):")
+                else:
+                    lines.append("⚠️ Draft placement FAILED — the reply text, for the record:")
+                lines.append("> " + v["reply"].strip().replace("\n", "\n> "))
+        else:
+            lines.append(f"(no verdict — model step failed this run) {it['snippet'][:160]}")
+        lines.append(f"`thread {it['thread_id']}`")
+    lines.append("")
+    lines.append("Edit and send from Gmail, or tell me here what to change and I'll update the draft in place. "
+                 "Nothing sends until you send it."
+                 + (f" ({excluded_total} bulk/system emails filtered.)" if excluded_total else ""))
+    return "\n".join(lines)
+
+
+def post(text):
+    channel = _dotenv("SLACK_HOME_CHANNEL")
+    if not channel:
+        raise RuntimeError("no SLACK_HOME_CHANNEL in ~/.hermes/.env")
+    subprocess.run([HERMES, "send", "-t", f"slack:{channel}", text],
+                   capture_output=True, text=True, timeout=60, check=True)
+
+
+# ----------------------------------------------------------------------------- main
+
+def main(dry_run=False):
+    state = load_state()
+    data = gather()
+    candidates = data.get("tier_a", []) + data.get("tier_b", [])
+    new = [c for c in candidates if c["message_id"] not in state["surfaced"]]
+    if not new:
+        log(f"nothing new — {len(candidates)} candidate(s) already surfaced, "
+            f"{sum(data.get('excluded', {}).values())} bulk filtered")
+        return
+    new = new[:MAX_NEW_PER_RUN]
+
+    service = google_api.build_service("gmail", "v1")
+    for it in new:
+        try:
+            it["_context"] = context_for(service, it)
+        except Exception as e:
+            it["_context"] = f"(context fetch failed: {e})\nSNIPPET: {it.get('snippet', '')}"
+
+    verdicts = judge(new)
+    by_n = {v.get("n"): v for v in (verdicts or []) if isinstance(v, dict)}
+    if not dry_run:
+        for i, it in enumerate(new, 1):
+            v = by_n.get(i) or {}
+            if v.get("verdict") == "reply" and v.get("reply", "").strip():
+                it["_draft_id"] = place_draft(it, v["reply"].strip())
+    text = format_post(new, verdicts, sum(data.get("excluded", {}).values()))
+    if dry_run:
+        print(text)
+        log(f"DRY RUN — {len(new)} new item(s), verdicts={'ok' if verdicts else 'FAILED'}; no drafts, state untouched")
+        return
+    post(text)
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    for it in new:
+        state["surfaced"][it["message_id"]] = now
+    save_state(state)
+    a = sum(1 for it in new if it.get("kb"))
+    wanted = sum(1 for i in range(1, len(new) + 1) if (by_n.get(i) or {}).get("verdict") == "reply")
+    placed = sum(1 for it in new if it.get("_draft_id"))
+    log(f"posted {len(new)} new item(s) to the home Slack channel (tier A {a}, tier B {len(new) - a}); "
+        f"drafts {placed}/{wanted} placed; verdicts={'ok' if verdicts else 'FAILED — listed without proposals'}")
+
+
+if __name__ == "__main__":
+    try:
+        main(dry_run="--dry-run" in sys.argv)
+    except Exception as e:
+        log(f"ERROR {type(e).__name__}: {e}")
+        sys.exit(1)

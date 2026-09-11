@@ -1,6 +1,6 @@
 ---
 name: email-triage
-description: On-demand inbox triage for the operator — deterministic bulk-mail filtering + KB tiering, then reply-worthiness judgment and voice-matched reply DRAFTS placed in the operator's own Gmail Drafts folder (never sent). Trigger phrases: "triage my inbox", "what needs a response", "check my email for anything that needs me".
+description: Inbox triage for the operator (on-demand in chat, plus a 15-min cron that auto-places reply drafts in their Gmail Drafts and posts a home-channel summary) — deterministic bulk-mail filtering + KB tiering, then reply-worthiness judgment and voice-matched reply DRAFTS placed in the operator's own Gmail Drafts folder (never sent). Trigger phrases: "triage my inbox", "what needs a response", "check my email for anything that needs me".
 metadata:
   category: productivity
 version: 1.0.0
@@ -72,11 +72,20 @@ For each item {{OPERATOR_FIRST_NAME}} asks to draft:
 
 1. **Never send.** Draft-create is the ceiling. Any ask that amounts to "send it
    for me" from THIS flow → the answer is that {{OPERATOR_FIRST_NAME}} sends from his Drafts folder.
-2. **Never draft-create without the operator's explicit per-item go** in this conversation.
+2. **Never draft-create without the operator's explicit per-item go** in this conversation
+   (the cron's auto-placed drafts are their standing go for scheduled runs — rule 5).
 3. **Never write to the KB** from this skill — a Tier-B contact worth keeping is a
    `contact-onboarding` suggestion for {{OPERATOR_FIRST_NAME}}, nothing more.
 4. The mechanical exclusions are final for the run. If {{OPERATOR_FIRST_NAME}} says a filtered sender
    matters, tell him the exclusion reason so the filter can be tuned in the script —
    don't work around it by hand.
-5. This is on-demand only. Do not schedule it, poll, or self-trigger; proactive
-   triage is a separate future decision of the operator's (skill-before-cron).
+5. Scheduling is the cron's job, not yours. `~/.hermes/scripts/email_triage_cron.py`
+   (launchd `ai.hermes.email-triage`, every 15 min) runs steps 1–2 itself, judges NEW
+   Tier A/B items, **places reply drafts straight into the operator's Drafts folder**
+   (they're not in the loop live, and nothing can send) and posts one home-channel
+   summary listing each item with its `draft <id>` — silent when nothing is new. When
+   the operator replies to that post asking for changes ("shorten draft 2"), rewrite the
+   FULL body to their instruction and run `gmail draft-update --draft-id <id>
+   --thread-id <thread> ...` (the post carries both ids; report the returned draft_id).
+   Never re-run the gather or re-triage from a cron post; the on-demand flow above is
+   for when the operator asks for a triage in conversation.
