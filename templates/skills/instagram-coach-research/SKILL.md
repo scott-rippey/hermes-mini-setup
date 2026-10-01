@@ -84,25 +84,23 @@ One short Slack message per handle: posts captured (by type), date range covered
 the window asked for, slides transcribed, anything skipped (carousel videos, failed
 slides) and why.
 
-### 4. Synthesis (when the window is covered, or the operator says enough)
+### 4. Synthesis (map-reduce — the script, then the agent)
 
-1. `report <handle>` for each coach → read the markdown (long; page through it
-   with `read_file` if needed, it lives at `~/<outputs>/ig-research/<handle>/`).
-2. Pull the operator's own documented approach from the KB — the app's synced docs
-   (`mcp_rag search` scoped to the app/customer the operator names) — and ground every "we align /
-   we differ" claim in a specific KB passage.
-3. Produce the comparison the operator asked for (weekly architecture, running volume
-   and intensity distribution, strength method, compromised running, station
-   work, progression and testing, recovery, individualization — only the axes
-   the captured content actually supports; say plainly where a coach's posts
-   are silent). Quote slide text verbatim where it carries the point, cite the
-   post URL and date after each claim, and separate **what they prescribe**
-   from **what they promote**.
-4. Deliver via `deliverable-export` (branded DOCX/PDF to the outputs folder,
-   emailed to the operator) and summarize in Slack.
-5. **Offer** to file the report in the KB (type `research`, under the customer
-   and app the operator names). The operator decides; never auto-store. Raw ledgers stay on
-   disk, not in the KB.
+```
+python ~/.hermes/skills/productivity/instagram-coach-research/scripts/ig_synthesize.py digest <handle> --since YYYY-MM-DD
+python ~/.hermes/skills/productivity/instagram-coach-research/scripts/ig_synthesize.py final --handles a,b --app <app-slug> --ours "<our program name>" --subject "<email subject>" --topic "<what the operator asked>"
+```
+`digest` turns each coach-month of the ledger into METHODOLOGY NOTES (one no-tools agent
+call per month, a few in parallel, every claim cited `(date · URL)`, prescribed vs promoted
+kept apart) under `<handle>/digest-YYYY-MM.md` — resumable. `final` exports the app's own
+methodology docs from the KB (`--kb-hints` path substrings; narrow them to the app's methodology docs), then runs ONE agent turn that writes the comparison (executive
+summary · per-coach profiles · side-by-side on each supported axis · where we align /
+differ / are stronger / have blind spots, every claim cited; verbatim-quote appendix) to
+`synthesis/methodology-comparison-<date>.md`, exports it with `deliverable-export`
+(branded DOCX + PDF, emailed to the operator), posts the summary to Slack and prints
+`FINAL_RESULT: …`. **Offer** to file the report in the KB (type `research`, under the
+customer and app the operator names). The operator decides; never auto-store. Raw ledgers and digests
+stay on disk, not in the KB.
 
 ## Hard rules
 

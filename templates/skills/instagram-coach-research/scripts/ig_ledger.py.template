@@ -11,7 +11,7 @@ Commands:
                           merge into the queue (keeps order, dedupes)
   next <handle> [n]       print the next n queued URLs not yet in the ledger (default 1)
   status <handle>         counts, date range, queue position, posts missing slide text
-  report <handle>         markdown dump grouped by month (newest first) for synthesis
+  report <handle> [--month YYYY-MM] [--types carousel,post]   markdown dump for synthesis (newest first)
   list <handle>           urls already captured
 
 Post object fields: url (req), date (YYYY-MM-DD, req), type (post|carousel|reel, req),
@@ -36,7 +36,7 @@ def paths(handle):
 def load_posts(p):
     posts = OrderedDict()
     if p.exists():
-        for line in p.read_text().splitlines():
+        for line in p.read_text(encoding="utf-8").split("\n"):  # not splitlines(): captions carry U+2028
             if line.strip():
                 o = json.loads(line)
                 posts[o["url"]] = o
@@ -45,7 +45,7 @@ def load_posts(p):
 
 def save_posts(p, posts):
     tmp = p.with_suffix(".tmp")
-    tmp.write_text("".join(json.dumps(o, ensure_ascii=False) + "\n" for o in posts.values()))
+    tmp.write_text("".join(json.dumps(o, ensure_ascii=False) + "\n" for o in posts.values()), encoding="utf-8")
     tmp.replace(p)
 
 
@@ -128,11 +128,16 @@ def cmd_list(handle):
         print(u)
 
 
-def cmd_report(handle):
+def cmd_report(handle, only_month=None, only_types=None):
     pp, _ = paths(handle)
     posts = sorted(load_posts(pp).values(), key=lambda o: o["date"], reverse=True)
+    if only_month:
+        posts = [o for o in posts if o["date"][:7] == only_month]
+    if only_types:
+        posts = [o for o in posts if o["type"] in only_types]
     month = None
-    print(f"# @{handle.strip('@')} — {len(posts)} posts captured\n")
+    scope = f" · {only_month}" if only_month else ""
+    print(f"# @{handle.strip('@')} — {len(posts)} posts{scope}\n")
     for o in posts:
         m = o["date"][:7]
         if m != month:
@@ -166,6 +171,10 @@ if __name__ == "__main__":
     elif cmd == "list":
         cmd_list(handle)
     elif cmd == "report":
-        cmd_report(handle)
+        # report <handle> [--month YYYY-MM] [--types carousel,post]
+        a = sys.argv[3:]
+        m = a[a.index("--month") + 1] if "--month" in a else None
+        t = set(a[a.index("--types") + 1].split(",")) if "--types" in a else None
+        cmd_report(handle, m, t)
     else:
         sys.exit(__doc__)

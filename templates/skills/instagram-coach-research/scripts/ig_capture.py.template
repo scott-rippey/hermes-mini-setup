@@ -138,7 +138,7 @@ def load_posts(handle):
     p = HOME / "{{AGENT_SLUG}}-outputs/ig-research" / handle.strip("@").lower() / "posts.jsonl"
     posts = {}
     if p.exists():
-        for line in p.read_text().splitlines():
+        for line in p.read_text(encoding="utf-8").split("\n"):  # not splitlines(): captions carry U+2028
             if line.strip():
                 o = json.loads(line)
                 posts[o["url"]] = o
@@ -313,7 +313,7 @@ async def transcribe(handle, concurrency, limit):
 
     def save():
         tmp = path.with_suffix(".tmp")
-        tmp.write_text("".join(json.dumps(o, ensure_ascii=False) + "\n" for o in posts.values()))
+        tmp.write_text("".join(json.dumps(o, ensure_ascii=False) + "\n" for o in posts.values()), encoding="utf-8")
         tmp.replace(path)
 
     await asyncio.gather(*(one(o, s) for o, s in todo))

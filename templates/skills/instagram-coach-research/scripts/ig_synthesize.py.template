@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""Synthesis stage for the instagram-coach-research skill — map-reduce over the ledgers.
+
+Stage 1 `digest`: for each handle and each month in the window, feed that month's ledger
+report (captions + every transcribed slide) to the agent model (`hermes -z`, no tools) and
+save structured METHODOLOGY NOTES — what the coach prescribes, how they structure training,
+their stated principles, with a (date · URL) citation after every claim — to
+`~/{{AGENT_SLUG}}-outputs/ig-research/<handle>/digest-YYYY-MM.md`. Resumable (existing digests are kept);
+a few months run in parallel.
+
+Stage 2 `final`: writes a prompt file with every digest + the operator's own methodology
+docs pulled from the KB (app-scoped `memory_documents`, the named paths) and runs ONE agent
+turn WITH tools so it follows the skill's step 4: the comparison, `deliverable-export`
+(branded DOCX/PDF, emailed to the operator), a Slack summary, and the offer to file.
+
+Usage:
+  ig_synthesize.py digest <handle> --since YYYY-MM-DD [--parallel 3]
+  ig_synthesize.py final --handles a,b --app <app-slug> --topic "<what we're comparing>" [--since YYYY-MM-DD]
+"""
+import argparse
+import concurrent.futures as cf
+import datetime as dt
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+HOME = Path.home()
+HERMES = HOME / ".local/bin/hermes"
+LEDGER = Path(__file__).resolve().parent / "ig_ledger.py"
+ROOT = HOME / "{{AGENT_SLUG}}-outputs/ig-research"
+PSQL = "/opt/homebrew/bin/psql"
+PGDATABASE = "{{KB_DB_NAME}}"
+DEFAULT_KB_HINTS = "CLAUDE.md,docs/"  # path substrings of the app docs that state the methodology — narrow this per app
+ENV = {**os.environ, "HOME": str(HOME),
+       "PATH": "/opt/homebrew/bin:" + str(HOME / ".local/bin") + ":" + str(HOME / ".hermes/bin") + ":/usr/bin:/bin:/usr/sbin:/sbin"}
+
+
+def log(msg):
+    print(f"[{dt.datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def months(since):
+    d = dt.date.fromisoformat(since).replace(day=1)
+    today = dt.date.today().replace(day=1)
+    out = []
+    while d <= today:
+        out.append(d.strftime("%Y-%m"))
+        d = (d.replace(day=28) + dt.timedelta(days=4)).replace(day=1)
+    return out
+
+
+def hermes_oneshot(prompt, timeout=900):
+    r = subprocess.run([str(HERMES), "-z", prompt], capture_output=True, text=True, timeout=timeout, env=ENV)
+    return r.stdout or ""
+
+
+# ----------------------------------------------------------------------------- stage 1
+
+DIGEST_PROMPT = """You are building METHODOLOGY NOTES on a coach from one month of their public Instagram content (below: every post's caption plus the verbatim text of every carousel slide; reels appear as caption only). Do NOT use any tools — work only from the DATA.
+
+Write markdown notes that a strength & conditioning expert could rely on, organised under these headings (omit a heading if the month has nothing on it):
+- Training architecture (weekly structure, session types, how pieces fit)
+- Running: volume, intensity distribution, specific session prescriptions
+- Strength: method, exercise selection, loading/volume rules
+- Compromised running / station transitions
+- Station-specific work (sled, ski, row, burpee broad jump, farmers, lunges, wall balls)
+- Progression, periodization, testing & athlete classification
+- Recovery, tapering, injury management
+- Individualization & coaching philosophy
+- What they SELL vs what they PRESCRIBE (be honest about promotional content)
+
+Rules: quote slide text verbatim when it carries the point; after EVERY claim put a citation in the form (YYYY-MM-DD · URL) from the DATA; never invent or generalise beyond what the posts say; say plainly when a topic is only mentioned, not prescribed. Keep it dense — bullets, not prose. End with a 3-line "Month in one breath" summary.
+
+Output ONLY the markdown wrapped EXACTLY between <!--DIGEST--> and <!--/DIGEST-->.
+
+DATA ({handle}, {month}):
+{report}"""
+
+
+def digest_one(handle, month):
+    out = ROOT / handle / f"digest-{month}.md"
+    if out.exists() and out.stat().st_size > 200:
+        return month, "kept"
+    report = subprocess.run([sys.executable, str(LEDGER), "report", handle, "--month", month],
+                            capture_output=True, text=True, timeout=120).stdout
+    if report.count("\n### ") == 0:
+        return month, "no posts"
+    text = hermes_oneshot(DIGEST_PROMPT.format(handle=handle, month=month, report=report))
+    a, b = text.find("<!--DIGEST-->"), text.find("<!--/DIGEST-->")
+    if a < 0 or b < 0:
+        return month, "FAILED (no DIGEST block)"
+    body = text[a + len("<!--DIGEST-->"):b].strip()
+    out.write_text(f"# @{handle} — {month}\n\n{body}\n")
+    return month, f"ok ({len(body)} chars, {report.count(chr(10) + '### ')} posts)"
+
+
+def digest(handle, since, parallel):
+    handle = handle.strip("@").lower()
+    ms = months(since)
+    log(f"digesting @{handle}: {len(ms)} months, {parallel} in parallel")
+    with cf.ThreadPoolExecutor(max_workers=parallel) as ex:
+        for month, res in ex.map(lambda m: digest_one(handle, m), ms):
+            log(f"  {handle} {month}: {res}")
+
+
+# ----------------------------------------------------------------------------- stage 2
+
+def kb_docs(app_slug, hints):
+    q = ("SELECT d.path, d.content FROM memory_documents d JOIN apps a ON a.id=d.app_id "
+         "WHERE a.slug=:'slug' AND d.status='active' AND (" +
+         " OR ".join(f"d.path ILIKE '%{h}%'" for h in hints) + ") ORDER BY length(d.content) DESC")
+    r = subprocess.run([PSQL, "-d", PGDATABASE, "-At", "-F", "\x1f", "-R", "\x1e", "-v", f"slug={app_slug}"],
+                       input=q, capture_output=True, text=True, timeout=60)
+    docs = []
+    for row in r.stdout.split("\x1e"):
+        if "\x1f" in row:
+            path, content = row.split("\x1f", 1)
+            docs.append((path.strip(), content))
+    return docs
+
+
+FINAL_PROMPT = """Use the instagram-coach-research skill, step 4 (Synthesis) — skill_view it first and follow it. The operator asked for: {topic}
+
+INPUTS (all on disk; read them with read_file — they are long, page through):
+- Methodology notes per coach per month: {digest_list}
+- The operator's own documented approach (the {app} app docs, exported from the KB): {kb_file}
+- Raw ledgers (only if you need to verify a quote): {ledger_list}
+
+Produce the comparison as a complete markdown report saved to {report_md} — structure: executive summary (half a page, the 5 things that matter) · per-coach methodology profile (what they prescribe, what they merely promote) · side-by-side comparison on each axis the content supports (weekly architecture, running volume & intensity, strength method, compromised running, station work, progression/testing/classification, recovery/taper, individualization) · where OUR program ({ours}) ALIGNS, where it DIFFERS, what it already handles better, and blind spots worth considering — every claim about a coach cited (date · URL) from the notes, every claim about our program cited to the KB doc path · an appendix of the strongest verbatim slide quotes per coach. Be specific and honest; say where a coach's content is silent.
+
+Then follow the deliverable-export skill: branded DOCX + PDF from that markdown into the outputs folder, and email the PDF to the operator ({owner_email}, subject "{subject}"). Post a short summary (the executive summary's 5 points + where the files are) to Slack channel {slack} with `hermes send`. Finally print exactly one line: FINAL_RESULT: <ok|partial|failed> <report path> <pdf path>. Do NOT write to the KB — the operator decides whether to file it."""
+
+
+def final(handles, app_slug, topic, since, ours, subject, owner_email, hints):
+    handles = [h.strip("@").lower() for h in handles]
+    stamp = dt.date.today().isoformat()
+    outdir = ROOT / "synthesis"
+    outdir.mkdir(exist_ok=True)
+    digests = [p for h in handles for p in sorted((ROOT / h).glob("digest-*.md"))]
+    if not digests:
+        sys.exit("no digests yet — run the digest stage first")
+    docs = kb_docs(app_slug, hints)
+    kb_file = outdir / f"kb-{app_slug}-{stamp}.md"
+    kb_file.write_text("\n\n".join(f"<!-- KB doc: {p} -->\n# {p}\n\n{c}" for p, c in docs))
+    log(f"KB export: {len(docs)} docs, {kb_file.stat().st_size // 1000} KB → {kb_file}")
+    slack = ""
+    for line in (HOME / ".hermes/.env").read_text().splitlines():
+        if line.startswith("SLACK_HOME_CHANNEL="):
+            slack = line.split("=", 1)[1].strip()
+    report_md = outdir / f"methodology-comparison-{stamp}.md"
+    prompt = FINAL_PROMPT.format(topic=topic, ours=ours, subject=subject, owner_email=owner_email, digest_list=", ".join(str(p) for p in digests), app=app_slug,
+                                 kb_file=kb_file, ledger_list=", ".join(str(ROOT / h / "posts.jsonl") for h in handles),
+                                 report_md=report_md, slack=slack or "the home channel")
+    (outdir / f"final-prompt-{stamp}.txt").write_text(prompt)
+    log(f"final synthesis: {len(digests)} digests; running the agent turn (this takes a while)")
+    out = hermes_oneshot(prompt, timeout=3600)
+    (outdir / f"final-output-{stamp}.txt").write_text(out)
+    res = [l for l in out.splitlines() if l.startswith("FINAL_RESULT:")]
+    log(res[-1] if res else "FINAL_RESULT missing — see final-output file")
+    return res[-1] if res else None
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("cmd", choices=["digest", "final"])
+    ap.add_argument("handle", nargs="?")
+    ap.add_argument("--since", default="2025-10-01")
+    ap.add_argument("--parallel", type=int, default=3)
+    ap.add_argument("--handles")
+    ap.add_argument("--app")
+    ap.add_argument("--topic", default="a comparison of these coaches' training methodologies against our own")
+    ap.add_argument("--ours", default="our program", help="name of the operator's own program/app for the report")
+    ap.add_argument("--subject", default="Coaching methodology comparison")
+    ap.add_argument("--owner-email", default=os.environ.get("IG_OWNER_EMAIL", "{{OPERATOR_EMAIL}}"))
+    ap.add_argument("--kb-hints", default=DEFAULT_KB_HINTS, help="comma-separated path substrings of the app's methodology docs")
+    a = ap.parse_args()
+    if a.cmd == "digest":
+        if not a.handle:
+            ap.error("handle required")
+        digest(a.handle, a.since, a.parallel)
+    else:
+        if not a.handles or not a.app:
+            ap.error("--handles and --app required")
+        final(a.handles.split(","), a.app, a.topic, a.since, a.ours, a.subject, a.owner_email, [h for h in a.kb_hints.split(",") if h])
+
+
+if __name__ == "__main__":
+    main()
