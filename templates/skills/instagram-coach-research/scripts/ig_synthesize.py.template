@@ -123,6 +123,9 @@ def kb_docs(app_slug, hints):
 
 FINAL_PROMPT = """Use the instagram-coach-research skill, step 4 (Synthesis) — skill_view it first and follow it. The operator asked for: {topic}
 
+COVERAGE (posts captured per month from each coach's public grid — state this in the report, and treat an empty or near-empty month as a real gap in the coach's posting, not as missing data):
+{coverage}
+
 INPUTS (all on disk; read them with read_file — they are long, page through):
 - Methodology notes per coach per month: {digest_list}
 - The operator's own documented approach (the {app} app docs, exported from the KB): {kb_file}
@@ -139,6 +142,15 @@ def final(handles, app_slug, topic, since, ours, subject, owner_email, hints):
     outdir = ROOT / "synthesis"
     outdir.mkdir(exist_ok=True)
     digests = [p for h in handles for p in sorted((ROOT / h).glob("digest-*.md"))]
+    cov = []
+    for h in handles:
+        counts = {}
+        for line in (ROOT / h / "posts.jsonl").read_text(encoding="utf-8").split("\n"):
+            if line.strip():
+                m = json.loads(line)["date"][:7]
+                counts[m] = counts.get(m, 0) + 1
+        cov.append(f"- @{h}: " + ", ".join(f"{m} {n}" for m, n in sorted(counts.items())) + f" (total {sum(counts.values())})")
+    coverage = "\n".join(cov)
     if not digests:
         sys.exit("no digests yet — run the digest stage first")
     docs = kb_docs(app_slug, hints)
@@ -150,7 +162,7 @@ def final(handles, app_slug, topic, since, ours, subject, owner_email, hints):
         if line.startswith("SLACK_HOME_CHANNEL="):
             slack = line.split("=", 1)[1].strip()
     report_md = outdir / f"methodology-comparison-{stamp}.md"
-    prompt = FINAL_PROMPT.format(topic=topic, ours=ours, subject=subject, owner_email=owner_email, digest_list=", ".join(str(p) for p in digests), app=app_slug,
+    prompt = FINAL_PROMPT.format(topic=topic, ours=ours, coverage=coverage, subject=subject, owner_email=owner_email, digest_list=", ".join(str(p) for p in digests), app=app_slug,
                                  kb_file=kb_file, ledger_list=", ".join(str(ROOT / h / "posts.jsonl") for h in handles),
                                  report_md=report_md, slack=slack or "the home channel")
     (outdir / f"final-prompt-{stamp}.txt").write_text(prompt)
