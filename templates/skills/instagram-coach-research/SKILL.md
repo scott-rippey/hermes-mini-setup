@@ -79,6 +79,9 @@ For each URL:
    preserving line breaks and list structure. If there is a table, chart, or
    diagram, describe it in one or two precise sentences after the text. Output
    only the transcription."* — the paragraphs matter, not just headlines.
+   **Use `vision_analyze` with the image URL. Never `browser_vision` or any
+   screenshot** — the headless snapshot browser has no viewport to screenshot
+   ("Cannot take screenshot with 0 width") and the slide image is already a URL.
 5. **Single-image posts:** one slide, same vision step.
 6. Record immediately:
    ```
@@ -86,7 +89,12 @@ For each URL:
      | python ~/.hermes/skills/productivity/instagram-coach-research/scripts/ig_ledger.py add <handle>
    ```
    The ledger upserts by URL, so a re-run of a half-captured post is safe.
-7. Pace like a person: one post at a time, no parallel sessions, and if
+7. **One failure is one post, not the batch.** If a tool call errors on a post
+   (image fetch, vision, a missing Next button), retry it once; if it still
+   fails, `add` the post with what you have plus `"notes": "<what failed>"` and
+   move to the next URL. Only a login wall, a rate-limit page, or the browser
+   itself refusing to start ends the batch early.
+8. Pace like a person: one post at a time, no parallel sessions, and if
    Instagram answers with "Please wait a few minutes", "Try again later", a
    challenge page, or repeated empty snapshots, **stop the batch and report** —
    never hammer through it.
