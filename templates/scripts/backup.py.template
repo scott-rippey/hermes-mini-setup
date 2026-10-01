@@ -68,6 +68,9 @@ TAR_EXCLUDES = [
     # regenerable tooling/deps (reinstalled, not config): uv/tirith binaries,
     # scrapling browser-driver venv (~390MB of Playwright/patchright)
     ".hermes/bin", ".hermes/tools",
+    # real-profile browser snapshot: Chrome cookies/login DBs re-synced from the live profile on
+    # every fresh session — a copy of credentials, not state worth bundling (re-login is a DR step)
+    ".hermes/browser-profile",
     # live DBs (snapshotted separately for consistency)
     ".hermes/state.db", ".hermes/state.db-shm", ".hermes/state.db-wal",
     ".hermes/kanban.db", ".hermes/kanban.db-shm", ".hermes/kanban.db-wal",

@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""Checkpoint ledger for the instagram-coach-research skill. No network, no LLM.
+
+Layout (per Instagram handle):
+  ~/{{AGENT_SLUG}}-outputs/ig-research/<handle>/posts.jsonl   one JSON object per post (deduped by url)
+  ~/{{AGENT_SLUG}}-outputs/ig-research/<handle>/progress.json  {"queue": [urls in grid order], "next": int}
+
+Commands:
+  add <handle>            read ONE post JSON object on stdin; validate; upsert by url
+  queue <handle>          read a JSON list of post URLs on stdin (grid order, newest first);
+                          merge into the queue (keeps order, dedupes)
+  next <handle> [n]       print the next n queued URLs not yet in the ledger (default 1)
+  status <handle>         counts, date range, queue position, posts missing slide text
+  report <handle>         markdown dump grouped by month (newest first) for synthesis
+  list <handle>           urls already captured
+
+Post object fields: url (req), date (YYYY-MM-DD, req), type (post|carousel|reel, req),
+caption (str), hashtags [str], slides [{index, image_url, text}], notes (str).
+"""
+import json
+import sys
+from collections import OrderedDict
+from pathlib import Path
+
+ROOT = Path.home() / "{{AGENT_SLUG}}-outputs" / "ig-research"
+REQUIRED = ("url", "date", "type")
+TYPES = {"post", "carousel", "reel"}
+
+
+def paths(handle):
+    d = ROOT / handle.strip("@").lower()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "posts.jsonl", d / "progress.json"
+
+
+def load_posts(p):
+    posts = OrderedDict()
+    if p.exists():
+        for line in p.read_text().splitlines():
+            if line.strip():
+                o = json.loads(line)
+                posts[o["url"]] = o
+    return posts
+
+
+def save_posts(p, posts):
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text("".join(json.dumps(o, ensure_ascii=False) + "\n" for o in posts.values()))
+    tmp.replace(p)
+
+
+def load_progress(p):
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return {"queue": [], "next": 0}
+
+
+def norm_url(u):
+    u = u.split("?")[0].rstrip("/")
+    return u + "/"
+
+
+def cmd_add(handle):
+    pp, _ = paths(handle)
+    o = json.loads(sys.stdin.read())
+    missing = [k for k in REQUIRED if not o.get(k)]
+    if missing:
+        sys.exit(f"missing required field(s): {missing}")
+    if o["type"] not in TYPES:
+        sys.exit(f"type must be one of {sorted(TYPES)}")
+    if len(o["date"]) != 10:
+        sys.exit("date must be YYYY-MM-DD")
+    o["url"] = norm_url(o["url"])
+    o.setdefault("caption", "")
+    o.setdefault("hashtags", [])
+    o.setdefault("slides", [])
+    posts = load_posts(pp)
+    existed = o["url"] in posts
+    posts[o["url"]] = o
+    save_posts(pp, posts)
+    print(json.dumps({"status": "updated" if existed else "added", "url": o["url"],
+                      "total": len(posts), "slides": len(o["slides"])}))
+
+
+def cmd_queue(handle):
+    _, pr = paths(handle)
+    urls = [norm_url(u) for u in json.loads(sys.stdin.read())]
+    prog = load_progress(pr)
+    seen = set(prog["queue"])
+    added = [u for u in urls if u not in seen and not seen.add(u)]
+    prog["queue"].extend(added)
+    pr.write_text(json.dumps(prog, indent=1))
+    print(json.dumps({"queued_total": len(prog["queue"]), "added": len(added)}))
+
+
+def cmd_next(handle, n=1):
+    pp, pr = paths(handle)
+    done = set(load_posts(pp))
+    prog = load_progress(pr)
+    out = [u for u in prog["queue"] if u not in done][:n]
+    print(json.dumps(out))
+
+
+def cmd_status(handle):
+    pp, pr = paths(handle)
+    posts = load_posts(pp)
+    prog = load_progress(pr)
+    done = set(posts)
+    dates = sorted(o["date"] for o in posts.values())
+    print(json.dumps({
+        "handle": handle,
+        "captured": len(posts),
+        "by_type": {t: sum(1 for o in posts.values() if o["type"] == t) for t in sorted(TYPES)},
+        "newest": dates[-1] if dates else None,
+        "oldest": dates[0] if dates else None,
+        "queued": len(prog["queue"]),
+        "remaining_in_queue": sum(1 for u in prog["queue"] if u not in done),
+        "carousels_without_slide_text": [o["url"] for o in posts.values()
+                                         if o["type"] == "carousel" and not any(s.get("text") for s in o["slides"])],
+        "dir": str(pp.parent),
+    }, indent=1))
+
+
+def cmd_list(handle):
+    pp, _ = paths(handle)
+    for u in load_posts(pp):
+        print(u)
+
+
+def cmd_report(handle):
+    pp, _ = paths(handle)
+    posts = sorted(load_posts(pp).values(), key=lambda o: o["date"], reverse=True)
+    month = None
+    print(f"# @{handle.strip('@')} — {len(posts)} posts captured\n")
+    for o in posts:
+        m = o["date"][:7]
+        if m != month:
+            month = m
+            print(f"\n## {month}\n")
+        print(f"### {o['date']} · {o['type']} · {o['url']}")
+        if o.get("caption"):
+            print(f"\n**Caption:** {o['caption'].strip()}\n")
+        for s in o.get("slides", []):
+            if s.get("text"):
+                print(f"- Slide {s.get('index', '?')}: {s['text'].strip()}")
+        if o.get("hashtags"):
+            print(f"\n_tags: {' '.join(o['hashtags'])}_")
+        if o.get("notes"):
+            print(f"\n_notes: {o['notes']}_")
+        print()
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        sys.exit(__doc__)
+    cmd, handle = sys.argv[1], sys.argv[2]
+    if cmd == "add":
+        cmd_add(handle)
+    elif cmd == "queue":
+        cmd_queue(handle)
+    elif cmd == "next":
+        cmd_next(handle, int(sys.argv[3]) if len(sys.argv) > 3 else 1)
+    elif cmd == "status":
+        cmd_status(handle)
+    elif cmd == "list":
+        cmd_list(handle)
+    elif cmd == "report":
+        cmd_report(handle)
+    else:
+        sys.exit(__doc__)

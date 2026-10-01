@@ -54,4 +54,4 @@ cd hermes-mini-setup
 
 ## Provenance
 
-This is the sanitized, reproducible walkthrough of a real production system (built June–July 2026 on Hermes Agent v0.17.0, running on v0.19.0 today). Every feature here runs daily on the original box; every gotcha in the appendix was hit for real. Nothing customer- or operator-specific was ever committed to this repo — the personalization phase generates *your* specifics locally.
+This is the sanitized, reproducible walkthrough of a real production system (built June–July 2026 on Hermes Agent v0.17.0, running on v0.21.5 today). Every feature here runs daily on the original box; every gotcha in the appendix was hit for real. Nothing customer- or operator-specific was ever committed to this repo — the personalization phase generates *your* specifics locally.
