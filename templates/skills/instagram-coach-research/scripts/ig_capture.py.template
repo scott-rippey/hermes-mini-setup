@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+"""Deterministic Instagram capture for the instagram-coach-research skill.
+
+Drives the agent's logged-in Chrome profile (a clone of the research account's Chrome
+profile, see --rebuild-profile) exactly the way Hermes's real-profile launcher does —
+real Chrome binary, Hermes's flag set, new headless, CDP port — and attaches Playwright
+over CDP. It then opens the coach's profile and SCROLLS: Instagram's own grid feed
+(`PolarisProfilePostsQuery` + `PolarisProfilePostsTabContentQuery_connection`, 12 posts
+a page) carries the full post objects — code, timestamp, type, caption, and every
+carousel slide's image URL — so no post page is ever visited. Posts inside the window
+are upserted into the skill's ledger (ig_ledger.py format) with empty slide text; the
+`transcribe` step fills the text through Hermes's own vision function, several slides
+in parallel.
+
+Usage:
+  ig_capture.py capture <handle> --since YYYY-MM-DD [--max-pages 80]
+  ig_capture.py transcribe <handle> [--concurrency 4] [--limit N]
+  ig_capture.py run <handle> --since YYYY-MM-DD      # capture then transcribe
+  ig_capture.py --rebuild-profile                     # re-clone the auth files from Chrome Profile 1
+
+Read-only on Instagram (viewing a public profile); no likes/follows/comments, no login
+handling — a login wall aborts with a clear message. Reels: caption only, never the video.
+"""
+import argparse
+import asyncio
+import datetime as dt
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+HERMES_AGENT = HOME / ".hermes/hermes-agent"
+LEDGER = Path(__file__).resolve().parent / "ig_ledger.py"
+PY = sys.executable
+CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+REAL_CHROME_DIR = HOME / "Library/Application Support/Google/Chrome"
+SOURCE_PROFILE = os.environ.get("IG_SOURCE_PROFILE", "Profile 1")   # the Chrome profile signed into the research account
+CLONE = HOME / "{{AGENT_SLUG}}-outputs/ig-research/.chrome-profile"
+AUTH_FILES = ["Cookies", "Login Data", "Login Data For Account", "Web Data", "Preferences", "Secure Preferences"]
+# Hermes's real-profile launch flags (tools/browser_tool_real_profile.py) + the Glic patch.
+FLAGS = ["--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
+         "--disable-background-networking", "--disable-component-update", "--disable-default-apps",
+         "--disable-hang-monitor", "--disable-popup-blocking", "--disable-prompt-on-repost",
+         "--disable-sync",
+         "--disable-features=Translate,Glic,GlicRollout,GlicActor,GlicWarming,GlicFreWarming,GlicZOrderChanges",
+         "--no-startup-window", "--headless=new"]
+FEED_QUERIES = ("PolarisProfilePostsQuery", "PolarisProfilePostsTabContentQuery_connection")
+VISION_PROMPT = ("Transcribe ALL text on this image verbatim, preserving line breaks and list structure. "
+                 "If there is a table, chart, or diagram, describe it in one or two precise sentences after "
+                 "the text. Output only the transcription.")
+
+
+def log(msg):
+    print(f"[{dt.datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+# ----------------------------------------------------------------------------- profile clone
+
+def chrome_running():
+    return subprocess.run(["pgrep", "-f", "Google Chrome"], capture_output=True).returncode == 0
+
+
+def clone_has_session():
+    try:
+        out = subprocess.run(["sqlite3", str(CLONE / "Default/Cookies"),
+                              "select count(*) from cookies where host_key like '%instagram.com' and name='sessionid'"],
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+        return out.isdigit() and int(out) > 0
+    except Exception:
+        return False
+
+
+def rebuild_profile():
+    """Fresh user-data-dir whose Default profile carries the research account's auth files."""
+    if chrome_running():
+        sys.exit("Chrome is running on this box — quit it first (its auth databases are write-locked while open).")
+    src = REAL_CHROME_DIR / SOURCE_PROFILE
+    if not (src / "Cookies").exists():
+        sys.exit(f"no Cookies DB under {src}")
+    shutil.rmtree(CLONE, ignore_errors=True)
+    (CLONE / "Default").mkdir(parents=True)
+    shutil.copy(REAL_CHROME_DIR / "Local State", CLONE / "Local State")
+    for f in AUTH_FILES:
+        if (src / f).exists():
+            shutil.copy(src / f, CLONE / "Default" / f)
+    ls = json.loads((CLONE / "Local State").read_text())
+    ls.setdefault("profile", {})["last_used"] = "Default"
+    ic = ls["profile"].get("info_cache", {})
+    if SOURCE_PROFILE in ic:
+        ic["Default"] = ic.pop(SOURCE_PROFILE)
+    (CLONE / "Local State").write_text(json.dumps(ls))
+    if not clone_has_session():
+        sys.exit("clone built but it holds no Instagram sessionid — sign the research account into Chrome "
+                 f"{SOURCE_PROFILE} on this box, quit Chrome, retry")
+    log(f"profile clone rebuilt from Chrome '{SOURCE_PROFILE}' → {CLONE}")
+
+
+def ensure_profile():
+    if not CLONE.exists() or not clone_has_session():
+        log("clone missing or without a session — rebuilding from Chrome")
+        rebuild_profile()
+
+
+# ----------------------------------------------------------------------------- chrome + playwright
+
+def launch_chrome():
+    if chrome_running():
+        sys.exit("Chrome is running on this box — quit it first.")
+    for f in ("SingletonLock", "SingletonCookie", "SingletonSocket", "DevToolsActivePort"):
+        (CLONE / f).unlink(missing_ok=True)
+    proc = subprocess.Popen([CHROME, f"--user-data-dir={CLONE}", *FLAGS],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    pf = CLONE / "DevToolsActivePort"
+    for _ in range(80):
+        if pf.exists():
+            break
+        time.sleep(0.5)
+    else:
+        proc.terminate()
+        sys.exit("Chrome never published its DevTools port")
+    port = pf.read_text().splitlines()[0].strip()
+    return proc, port
+
+
+def ledger(cmd, handle, stdin=None):
+    r = subprocess.run([PY, str(LEDGER), cmd, handle], input=stdin, capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError(f"ledger {cmd}: {r.stderr.strip() or r.stdout.strip()}")
+    return r.stdout
+
+
+def load_posts(handle):
+    p = HOME / "{{AGENT_SLUG}}-outputs/ig-research" / handle.strip("@").lower() / "posts.jsonl"
+    posts = {}
+    if p.exists():
+        for line in p.read_text().splitlines():
+            if line.strip():
+                o = json.loads(line)
+                posts[o["url"]] = o
+    return p, posts
+
+
+def best_url(image_versions2):
+    cands = (image_versions2 or {}).get("candidates") or []
+    cands = sorted(cands, key=lambda c: c.get("width", 0), reverse=True)
+    return cands[0]["url"] if cands else None
+
+
+def node_to_post(handle, n, existing):
+    code = n.get("code")
+    owner = (n.get("user") or {}).get("username") or (n.get("owner") or {}).get("username") or handle
+    mt = n.get("media_type")
+    kind = {1: "post", 2: "reel", 8: "carousel"}.get(mt)
+    if not code or not kind:
+        return None
+    url = f"https://www.instagram.com/{owner}/{'reel' if kind == 'reel' else 'p'}/{code}/"
+    date = dt.datetime.fromtimestamp(n.get("taken_at", 0), dt.timezone.utc).strftime("%Y-%m-%d")
+    caption = ((n.get("caption") or {}).get("text") or "").strip()
+    tags = sorted(set(re.findall(r"#\w+", caption)))
+    slides = []
+    if kind == "carousel":
+        for i, s in enumerate(n.get("carousel_media") or [], 1):
+            if s.get("media_type") == 2:      # a video inside a carousel: skip the video (rule), keep the index
+                slides.append({"index": i, "image_url": None, "text": "", "video": True})
+            else:
+                slides.append({"index": i, "image_url": best_url(s.get("image_versions2")), "text": ""})
+    elif kind == "post":
+        slides.append({"index": 1, "image_url": best_url(n.get("image_versions2")), "text": ""})
+    # keep any transcription already in the ledger for the same slide index
+    old = {s.get("index"): s for s in (existing.get(url, {}).get("slides") or [])}
+    for s in slides:
+        if old.get(s["index"], {}).get("text"):
+            s["text"] = old[s["index"]]["text"]
+    return {"url": url, "date": date, "type": kind, "caption": caption, "hashtags": tags, "slides": slides,
+            "pinned": bool(n.get("timeline_pinned_user_ids")), "code": code}
+
+
+def capture(handle, since, max_pages):
+    from playwright.sync_api import sync_playwright
+    handle = handle.strip("@").lower()
+    ensure_profile()
+    _, existing = load_posts(handle)
+    since_d = dt.date.fromisoformat(since)
+    pages, added, oldest_seen, stop_reason = [], 0, None, None
+    proc, port = launch_chrome()
+    log(f"chrome up on CDP {port}; scraping @{handle} back to {since}")
+    try:
+        with sync_playwright() as p:
+            b = p.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+            ctx = b.contexts[0]
+            page = ctx.new_page()
+
+            def on_response(resp):
+                try:
+                    if "instagram.com" not in resp.url or "graphql" not in resp.url:
+                        return
+                    m = re.search(r"fb_api_req_friendly_name=([A-Za-z0-9_]+)", resp.request.post_data or "")
+                    if not m or m.group(1) not in FEED_QUERIES:
+                        return
+                    d = json.loads(resp.text())
+                    conn = d["data"]["xdt_api__v1__feed__user_timeline_graphql_connection"]
+                    pages.append(conn)
+                except Exception as e:
+                    log(f"feed page parse skipped: {e}")
+
+            page.on("response", on_response)
+            page.goto(f"https://www.instagram.com/{handle}/", wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(5000)
+            html = page.content()
+            if page.locator("text=Log in").count() and not page.locator("text=Following").count():
+                stop_reason = "login_wall"
+            elif "Sorry, this page isn't available" in html:
+                stop_reason = "no_such_profile"
+            processed = 0
+            idle_rounds = 0
+            while stop_reason is None:
+                while processed < len(pages):
+                    conn = pages[processed]
+                    processed += 1
+                    nodes = [e.get("node") or {} for e in conn.get("edges", [])]
+                    page_dates = []
+                    for n in nodes:
+                        post = node_to_post(handle, n, existing)
+                        if not post:
+                            continue
+                        d = dt.date.fromisoformat(post["date"])
+                        page_dates.append(d)
+                        oldest_seen = d if oldest_seen is None or d < oldest_seen else oldest_seen
+                        if d < since_d:
+                            continue           # pinned/out-of-window: skip, don't stop on it alone
+                        pinned = post.pop("pinned")
+                        ledger("add", handle, json.dumps(post, ensure_ascii=False))
+                        existing[post["url"]] = post
+                        added += 1
+                    log(f"page {processed}: {len(nodes)} posts, dates {min(page_dates) if page_dates else '-'}..{max(page_dates) if page_dates else '-'}, ledger adds so far {added}")
+                    if page_dates and max(page_dates) < since_d:
+                        stop_reason = "window_reached"
+                        break
+                    if not conn.get("page_info", {}).get("has_next_page"):
+                        stop_reason = "grid_exhausted"
+                        break
+                if stop_reason:
+                    break
+                if processed >= max_pages:
+                    stop_reason = "max_pages"
+                    break
+                before = len(pages)
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(2500)
+                for _ in range(8):
+                    if len(pages) > before:
+                        break
+                    page.wait_for_timeout(1000)
+                if len(pages) == before:
+                    idle_rounds += 1
+                    if page.locator("text=Please wait a few minutes").count() or page.locator("text=Try again later").count():
+                        stop_reason = "rate_limited"
+                        break
+                    if idle_rounds >= 4:
+                        stop_reason = "grid_stalled"
+                        break
+                else:
+                    idle_rounds = 0
+            b.close()
+    finally:
+        proc.terminate()
+    log(f"capture done: {stop_reason}; pages {len(pages)}; added/updated {added}; oldest seen {oldest_seen}")
+    return stop_reason, added
+
+
+# ----------------------------------------------------------------------------- transcribe
+
+async def transcribe(handle, concurrency, limit):
+    handle = handle.strip("@").lower()
+    sys.path.insert(0, str(HERMES_AGENT))
+    from dotenv import load_dotenv
+    load_dotenv(HOME / ".hermes/.env")
+    from tools.vision_tools import vision_analyze_tool
+    path, posts = load_posts(handle)
+    todo = [(o, s) for o in posts.values() for s in o.get("slides", []) if s.get("image_url") and not s.get("text")]
+    if limit:
+        todo = todo[:limit]
+    log(f"transcribing {len(todo)} slide(s) across {len({o['url'] for o, _ in todo})} post(s), concurrency {concurrency}")
+    sem = asyncio.Semaphore(concurrency)
+    done = {"n": 0, "fail": 0}
+
+    async def one(o, s):
+        async with sem:
+            for attempt in (1, 2):
+                try:
+                    r = await vision_analyze_tool(s["image_url"], VISION_PROMPT)
+                    data = json.loads(r) if isinstance(r, str) else r
+                    txt = (data.get("analysis") or "").strip() if isinstance(data, dict) else str(r).strip()
+                    if data.get("success", True) and txt:
+                        s["text"] = txt
+                        done["n"] += 1
+                        break
+                    raise RuntimeError(data.get("error") or "empty analysis")
+                except Exception as e:
+                    if attempt == 2:
+                        s["error"] = str(e)[:200]
+                        done["fail"] += 1
+                    else:
+                        await asyncio.sleep(3)
+            if (done["n"] + done["fail"]) % 10 == 0:
+                save()
+                log(f"  {done['n']} transcribed, {done['fail']} failed")
+
+    def save():
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text("".join(json.dumps(o, ensure_ascii=False) + "\n" for o in posts.values()))
+        tmp.replace(path)
+
+    await asyncio.gather(*(one(o, s) for o, s in todo))
+    save()
+    log(f"transcribe done: {done['n']} slides transcribed, {done['fail']} failed")
+    return done
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("cmd", nargs="?", choices=["capture", "transcribe", "run"])
+    ap.add_argument("handle", nargs="?")
+    ap.add_argument("--since")
+    ap.add_argument("--max-pages", type=int, default=80)
+    ap.add_argument("--concurrency", type=int, default=4)
+    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--rebuild-profile", action="store_true")
+    a = ap.parse_args()
+    if a.rebuild_profile:
+        rebuild_profile()
+        return
+    if not a.cmd or not a.handle:
+        ap.error("cmd and handle required")
+    if a.cmd in ("capture", "run"):
+        if not a.since:
+            ap.error("--since YYYY-MM-DD required")
+        reason, _ = capture(a.handle, a.since, a.max_pages)
+        if reason in ("login_wall", "rate_limited", "no_such_profile"):
+            sys.exit(2)
+    if a.cmd in ("transcribe", "run"):
+        asyncio.run(transcribe(a.handle, a.concurrency, a.limit))
+    print(ledger("status", a.handle))
+
+
+if __name__ == "__main__":
+    main()

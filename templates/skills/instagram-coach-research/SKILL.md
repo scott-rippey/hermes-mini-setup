@@ -1,6 +1,6 @@
 ---
 name: instagram-coach-research
-description: Read-only Instagram methodology research — enumerate a coach's public posts over a date window through the agent's own logged-in browser profile, capture captions and EVERY carousel slide's text (OCR via vision), checkpoint to a resumable ledger, then synthesize a methodology comparison against the KB. Trigger phrases "scrape <handle>'s instagram", "compare coaching methodologies on instagram", "instagram research on <handle>".
+description: Read-only Instagram methodology research — a deterministic script (ig_capture.py) harvests a coach's public posts over a date window straight from Instagram's grid feed through the agent's logged-in Chrome profile clone (captions + EVERY carousel slide, transcribed by vision in parallel) into a resumable ledger; then the agent synthesizes a methodology comparison against the KB. Trigger phrases "scrape <handle>'s instagram", "compare coaching methodologies on instagram", "instagram research on <handle>".
 version: 1.0.0
 author: reference build
 license: MIT
@@ -33,86 +33,61 @@ challenge, and never writes to the KB on its own.
    the operator fixes the profile themselves (quit Chrome on the box, re-login, retry).
 2. Scope from the operator (ask once, via `clarify` if anything is missing): the
    handles, the window (default **12 months**, 6 months is the acceptable
-   floor), and the batch size per turn (default **10 posts**).
+   floor).
 
 ## Procedure
 
-### 1. Enumerate the grid (once per handle, resumable)
-
-- On the profile page, `browser_snapshot`, collect every post link
-  (`/<handle>/p/<id>/` and `/<handle>/reel/<id>/`; pinned posts first — keep
-  them, they're still that coach's content). Collaborator reposts show as
-  `/<otherhandle>/p/...` — keep those too, they're on this grid by the coach's
-  choice.
-- `browser_scroll` down and snapshot again until no new links appear **or** the
-  queue already covers more posts than the window plausibly holds (dates are
-  only visible on post pages, so the window is enforced in step 2).
-- Persist the queue in grid order (newest first):
-  ```
-  echo '<json list of urls>' | python ~/.hermes/skills/productivity/instagram-coach-research/scripts/ig_ledger.py queue <handle>
-  ```
-
-### 2. Capture posts, one at a time, checkpointing each
+### 1. Capture (deterministic — always the script, never hand-browsing)
 
 ```
-python ~/.hermes/skills/productivity/instagram-coach-research/scripts/ig_ledger.py next <handle> <batch>
+python ~/.hermes/skills/productivity/instagram-coach-research/scripts/ig_capture.py run <handle> --since YYYY-MM-DD
 ```
-For each URL:
-1. `browser_navigate` → `browser_snapshot`. Read the **date** (the post's time
-   element — the snapshot shows it as text like "September 20" or an absolute
-   date; older than a year shows the year), the **caption** (the author's own
-   text block at the top of the comments column — all of it, expand "more" if
-   shown), and the **type**: `reel` if the URL has `/reel/` or the page shows a
-   video player; `carousel` if a "Next" control / slide dots are present;
-   otherwise `post`.
-2. **Window check:** if the date is older than the window start, record nothing,
-   stop the batch, and note "window reached" — grid order is chronological, so
-   everything after it is older too. (Pinned posts break this rule: if one of
-   the first three posts is older than the window, skip it and continue.)
-3. **Reels:** capture caption + hashtags only. **Never download, play, or
-   transcribe the video** (operator's rule).
-4. **Carousels:** for every slide, in order: `browser_get_images` → take the
-   current slide's image URL (the large `instagram.f*.fbcdn.net` image that
-   changed since the last slide; skip avatars/icons), then `browser_click` the
-   **Next** button and repeat until Next is gone. Then run `vision_analyze` on
-   each slide image with: *"Transcribe ALL text on this image verbatim,
-   preserving line breaks and list structure. If there is a table, chart, or
-   diagram, describe it in one or two precise sentences after the text. Output
-   only the transcription."* — the paragraphs matter, not just headlines.
-   **Use `vision_analyze` with the image URL. Never `browser_vision` or any
-   screenshot** — the headless snapshot browser has no viewport to screenshot
-   ("Cannot take screenshot with 0 width") and the slide image is already a URL.
-5. **Single-image posts:** one slide, same vision step.
-6. Record immediately:
-   ```
-   echo '{"url":"…","date":"YYYY-MM-DD","type":"carousel","caption":"…","hashtags":["…"],"slides":[{"index":1,"image_url":"…","text":"…"}]}' \
-     | python ~/.hermes/skills/productivity/instagram-coach-research/scripts/ig_ledger.py add <handle>
-   ```
-   The ledger upserts by URL, so a re-run of a half-captured post is safe.
-7. **One failure is one post, not the batch.** If a tool call errors on a post
-   (image fetch, vision, a missing Next button), retry it once; if it still
-   fails, `add` the post with what you have plus `"notes": "<what failed>"` and
-   move to the next URL. Only a login wall, a rate-limit page, or the browser
-   itself refusing to start ends the batch early.
-8. Pace like a person: one post at a time, no parallel sessions, and if
-   Instagram answers with "Please wait a few minutes", "Try again later", a
-   challenge page, or repeated empty snapshots, **stop the batch and report** —
-   never hammer through it.
+(`capture` and `transcribe` also run separately; `--rebuild-profile` re-clones the login.)
+What it does: launches the real Chrome binary headless on a **clone of the research
+account's Chrome profile** (Hermes's own real-profile flag set + Glic disabled), attaches
+Playwright over CDP, opens the profile page and scrolls — Instagram's grid feed
+(`PolarisProfilePostsQuery` / `…TabContentQuery_connection`, 12 posts a page) carries
+every post object: code, timestamp, type, full caption, and **every carousel slide's
+image URL** — so no post page is visited. Posts inside the window are upserted into the
+ledger (type `post` / `carousel` / `reel`; reels = caption only, carousel videos skipped);
+then every slide image is transcribed verbatim through Hermes's vision function, several
+in parallel (~2 s a slide). Pinned posts older than the window are skipped, not treated
+as the end. Twelve months of a daily poster ≈ a few minutes of capture + ~1 h of
+transcription. The script exits 2 on `login_wall` / `rate_limited` — **stop and report**,
+never work around it. **Chrome must be quit on the box** before it runs (it refuses
+otherwise: the auth databases are write-locked while Chrome is open).
 
-### 3. End of each batch — report, don't drift
+### 2. Verify the ledger
 
 ```
 python ~/.hermes/skills/productivity/instagram-coach-research/scripts/ig_ledger.py status <handle>
 ```
-One short Slack message: posts captured so far (by type), oldest date reached vs
-the window start, how many remain in the queue, anything skipped and why. Then
-either continue with the next batch (if the operator said "run it all" and the turn's
-budget allows) or stop and wait for "continue".
+Check: oldest date ≤ the window start (or the run said `grid_exhausted`), and
+`carousels_without_slide_text` is empty (re-run `transcribe` for stragglers; a slide
+that failed twice carries an `error` field — mention it, don't fake text).
+
+### 2b. Fallback only — browser tools by hand
+
+If the script cannot run (Playwright gone, Chrome moved), the built-in browser tools can
+do the same job one post at a time: `browser_navigate` the profile → collect post links →
+per post read date/caption, step carousels with `browser_click` Next + `browser_get_images`,
+transcribe each slide URL with `vision_analyze` (**never `browser_vision`** — the headless
+snapshot cannot screenshot), `ig_ledger.py add` after every post, one failure = one post
+skipped with `notes`. Expect ~7 min per carousel; use it for a handful of posts, not a year.
+
+### 3. Report before synthesis
+
+```
+python ~/.hermes/skills/productivity/instagram-coach-research/scripts/ig_ledger.py status <handle>
+```
+One short Slack message per handle: posts captured (by type), date range covered vs
+the window asked for, slides transcribed, anything skipped (carousel videos, failed
+slides) and why.
 
 ### 4. Synthesis (when the window is covered, or the operator says enough)
 
 1. `report <handle>` for each coach → read the markdown (long; page through it
-   with `read_file` if needed, it lives at `~/<outputs>/ig-research/<handle>/` (the skill's ledger dir; the agent's outputs folder)).
+   with `read_file` if needed, it lives at `~/<outputs>/ig-research/<handle>/`).
 2. Pull the operator's own documented approach from the KB — the app's synced docs
    (`mcp_rag search` scoped to the app/customer the operator names) — and ground every "we align /
    we differ" claim in a specific KB passage.
