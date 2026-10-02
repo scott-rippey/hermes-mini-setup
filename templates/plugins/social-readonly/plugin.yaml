@@ -1,0 +1,4 @@
+name: social-readonly
+version: "1.0"
+description: Hard guard — the browser tools may only READ social-media sites (Instagram etc.); every click/type/keypress/JS-eval there is vetoed before dispatch
+author: {{OPERATOR_NAME}}

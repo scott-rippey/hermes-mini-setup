@@ -36,7 +36,8 @@ DOC_PREFIXES = ("docs/",)
 # the embeddings API's per-request token cap.
 BINARY_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".pdf",
                ".zip", ".gz", ".tar", ".mp3", ".mp4", ".mov", ".wav", ".m4a",
-               ".woff", ".woff2", ".ttf", ".otf", ".eot", ".psd"}
+               ".woff", ".woff2", ".ttf", ".otf", ".eot", ".psd",
+               ".xlsx", ".xls", ".docx", ".doc", ".pptx", ".ppt", ".numbers", ".pages", ".key"}
 MAX_DOC_BYTES = 400_000  # guard for giant text files (embed cap ~300K tokens/request)
 
 
