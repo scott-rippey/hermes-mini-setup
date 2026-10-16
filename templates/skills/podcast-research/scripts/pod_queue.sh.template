@@ -1,0 +1,20 @@
+#!/bin/zsh
+# Unattended queue for the podcast-research skill: for each show line "slug|feed|show name (hosts)"
+# in the queue file, run capture (local transcription, hours) then per-episode distillation,
+# then the per-show synthesis when --final is given. Resumable: every stage skips finished work.
+#   nohup ~/.hermes/skills/productivity/podcast-research/scripts/pod_queue.sh <queue.txt> <brief.md> [--final] > ~/{{AGENT_SLUG}}-outputs/podcast-research/queue.log 2>&1 &
+set -u
+Q="$1"; BRIEF="$2"; FINAL="${3:-}"
+S="$HOME/.hermes/skills/productivity/podcast-research/scripts"; PY="$HOME/.local/bin/python"
+ROOT="$HOME/{{AGENT_SLUG}}-outputs/podcast-research"; SINCE="${POD_SINCE:-$(date -v-365d +%Y-%m-%d)}"
+grep -v '^\s*#' "$Q" | grep '|' | while IFS='|' read -r slug feed name; do
+  echo "=== $(date '+%F %T') $slug — capture"
+  "$PY" "$S/pod_capture.py" run "$slug" --feed "$feed" --since "$SINCE" 2>&1 | grep -v -i warn
+  echo "=== $(date '+%F %T') $slug — distill"
+  "$PY" "$S/pod_distill.py" episode "$slug" --brief "$BRIEF" --show-name "$name" 2>&1 | grep -v -i warn
+  if [[ "$FINAL" == "--final" ]]; then
+    echo "=== $(date '+%F %T') $slug — synthesis"
+    "$PY" "$S/pod_distill.py" final "$slug" --brief "$BRIEF" --subject "Podcast research: $name" --topic "a distilled synthesis of the $name against the HYROX training brief, for the research hub" 2>&1 | grep -v -i warn
+  fi
+done
+echo "=== $(date '+%F %T') QUEUE DONE"

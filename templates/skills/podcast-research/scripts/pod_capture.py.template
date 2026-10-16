@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""Capture stage for the podcast-research skill — deterministic, NO AI judgement.
+
+Resolves a podcast (RSS feed URL, Apple Podcasts link, or Podcast Index link) to its feed,
+lists the episodes inside a date window, and gets a TEXT transcript for each into a
+resumable ledger under ~/{{AGENT_SLUG}}-outputs/podcast-research/<show>/:
+
+  episodes.jsonl                 one JSON object per episode (guid, date, title, duration, audio, status …)
+  transcripts/<date>-<slug>.md   "[mm:ss] sentence" lines, glossary-corrected
+  glossary.json                  {"misheard": "Correct"} substitutions applied after transcription
+  audio/                         downloaded MP3s (deleted after a successful transcription unless --keep-audio)
+
+Transcript source, in order: a <podcast:transcript> URL in the feed (srt/vtt/json/text —
+downloaded, no transcription) else local speech-to-text with faster-whisper (the Hermes
+venv's own STT library; default model large-v3-turbo, CPU int8, ~13 min per hour of audio
+on the M4). Nothing here contacts a model API. Re-runs skip finished episodes.
+
+Usage:
+  pod_capture.py search "<show name>"       # keyless Apple search → candidates with feed URLs (no browser)
+  pod_capture.py resolve <url>              # Podcast Index page, Apple page, or an RSS URL — nothing else is accepted
+  pod_capture.py run <show> --feed <url> --since YYYY-MM-DD [--until YYYY-MM-DD] [--model large-v3-turbo] [--keep-audio] [--limit N]
+  pod_capture.py status <show>
+  pod_capture.py reglossary <show>          # re-apply glossary.json to every finished transcript (raw copy kept)
+"""
+import argparse
+import datetime as dt
+import email.utils
+import html
+import json
+import os
+import re
+import sys
+import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+ROOT = Path.home() / "{{AGENT_SLUG}}-outputs/podcast-research"
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128 Safari/537.36"
+DEFAULT_GLOSSARY = {  # known mishearings from the benchmark; grows per show
+    "High Rocks": "HYROX", "Hirox": "HYROX", "Hi Rox": "HYROX", "high rocks": "HYROX", "Hyrox": "HYROX",
+    "Ski Erg": "SkiErg", "ski erg": "SkiErg", "Rox Zone": "Roxzone", "rocks zone": "Roxzone",
+}
+
+
+def log(msg):
+    print(f"[{dt.datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def fetch(url, timeout=120):
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def slugify(s, n=60):
+    s = re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+    return s[:n].rstrip("-") or "episode"
+
+
+# ----------------------------------------------------------------------------- resolve
+
+def resolve(url):
+    """Return the RSS feed URL for an RSS / Apple Podcasts / Podcast Index link."""
+    u = url.strip()
+    host = urllib.parse.urlsplit(u).hostname or ""
+    if "podcasts.apple.com" in host:
+        m = re.search(r"/id(\d+)", u)
+        if not m:
+            sys.exit("Apple link without an id")
+        r = json.loads(fetch(f"https://itunes.apple.com/lookup?id={m.group(1)}"))
+        if not r.get("results"):
+            sys.exit("Apple lookup found nothing")
+        return r["results"][0]["feedUrl"]
+    if "podcastindex.org" in host:
+        # the site is JS-rendered behind proof-of-work headers; use its <title> to find the show on Apple
+        page = fetch(u).decode("utf-8", "replace")
+        t = re.search(r"<title>([^<|]+)", page)
+        if not t:
+            sys.exit("Podcast Index page gave no title")
+        name = html.unescape(t.group(1)).strip()
+        r = json.loads(fetch("https://itunes.apple.com/search?media=podcast&limit=5&term=" + urllib.parse.quote(name)))
+        for res in r.get("results", []):
+            if res.get("collectionName", "").strip().lower() == name.lower() and res.get("feedUrl"):
+                return res["feedUrl"]
+        sys.exit(f"could not match '{name}' on Apple; pass the RSS feed URL with --feed instead")
+    # anything else must actually serve RSS — the skill is locked to Podcast Index, Apple, or a feed
+    head = fetch(u).decode("utf-8", "replace")[:4000].lower()
+    if "<rss" in head or "<feed" in head or "<channel" in head:
+        return u
+    sys.exit(f"refusing {u}: not a Podcast Index page, an Apple Podcasts page, or an RSS feed")
+
+
+def search(name, limit=5):
+    """Keyless Apple Podcasts search → candidate shows with their feed URLs."""
+    r = json.loads(fetch("https://itunes.apple.com/search?media=podcast&limit=" + str(limit) + "&term=" + urllib.parse.quote(name)))
+    out = []
+    for res in r.get("results", []):
+        out.append({"name": res.get("collectionName", ""), "author": res.get("artistName", ""),
+                    "episodes": res.get("trackCount", 0), "genre": res.get("primaryGenreName", ""),
+                    "apple": res.get("collectionViewUrl", ""), "feed": res.get("feedUrl", "")})
+    return out
+
+
+# ----------------------------------------------------------------------------- feed
+
+def parse_feed(xml):
+    items = []
+    for it in re.findall(r"<item>(.*?)</item>", xml, re.S):
+        def tag(name):
+            m = re.search(rf"<{name}[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</{name}>", it, re.S)
+            return html.unescape(m.group(1)).strip() if m else ""
+        enc = re.search(r'<enclosure[^>]*url="([^"]*)"', it)
+        tr = re.search(r'<podcast:transcript[^>]*url="([^"]*)"[^>]*(?:type="([^"]*)")?', it)
+        pub = tag("pubDate")
+        try:
+            date = email.utils.parsedate_to_datetime(pub).date().isoformat()
+        except Exception:
+            date = ""
+        items.append({
+            "guid": tag("guid") or (enc.group(1) if enc else tag("title")),
+            "title": re.sub(r"\s+", " ", tag("title")),
+            "date": date,
+            "duration": tag("itunes:duration"),
+            "audio": html.unescape(enc.group(1)) if enc else "",
+            "link": tag("link"),
+            "transcript_url": html.unescape(tr.group(1)) if tr else "",
+            "transcript_type": (tr.group(2) or "") if tr else "",
+        })
+    return items
+
+
+# ----------------------------------------------------------------------------- ledger
+
+def ledger_path(show):
+    return ROOT / show / "episodes.jsonl"
+
+
+def load_ledger(show):
+    p = ledger_path(show)
+    rows = {}
+    if p.exists():
+        for line in p.read_text(encoding="utf-8").split("\n"):
+            if line.strip():
+                o = json.loads(line)
+                rows[o["guid"]] = o
+    return rows
+
+
+def save_ledger(show, rows):
+    p = ledger_path(show)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text("".join(json.dumps(o, ensure_ascii=False) + "\n" for o in sorted(rows.values(), key=lambda o: o["date"])), encoding="utf-8")
+    tmp.replace(p)
+
+
+def load_glossary(show):
+    p = ROOT / show / "glossary.json"
+    if not p.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(DEFAULT_GLOSSARY, indent=2, ensure_ascii=False) + "\n")
+    return json.loads(p.read_text())
+
+
+def apply_glossary(text, glossary):
+    for wrong, right in sorted(glossary.items(), key=lambda kv: -len(kv[0])):
+        text = re.sub(rf"\b{re.escape(wrong)}\b", right, text)
+    return text
+
+
+# ----------------------------------------------------------------------------- transcripts
+
+def stamp(sec):
+    sec = int(sec)
+    return f"{sec // 3600}:{sec % 3600 // 60:02d}:{sec % 60:02d}" if sec >= 3600 else f"{sec // 60:02d}:{sec % 60:02d}"
+
+
+def transcript_from_feed(url, kind):
+    raw = fetch(url).decode("utf-8", "replace")
+    lines = []
+    if "json" in kind or raw.lstrip().startswith("{"):
+        try:
+            seg = json.loads(raw).get("segments", [])
+            return [(float(s.get("startTime", 0)), s.get("body", "").strip()) for s in seg if s.get("body")]
+        except Exception:
+            pass
+    if "srt" in kind or "vtt" in kind or "-->" in raw:
+        cur = None
+        for line in raw.splitlines():
+            m = re.match(r"(\d+):(\d+):(\d+)[.,](\d+)\s*-->", line) or re.match(r"(\d+):(\d+)[.,](\d+)\s*-->", line)
+            if m:
+                g = [int(x) for x in m.groups()]
+                cur = g[0] * 3600 + g[1] * 60 + g[2] if len(g) == 4 else g[0] * 60 + g[1]
+            elif line.strip() and not line.strip().isdigit() and cur is not None and not line.startswith("WEBVTT"):
+                lines.append((cur, re.sub(r"<[^>]+>", "", line).strip()))
+        return lines
+    return [(0, raw.strip())]
+
+
+_MODEL = None
+
+
+def whisper_model(name):
+    global _MODEL
+    if _MODEL is None:
+        from faster_whisper import WhisperModel  # the Hermes venv ships it (its local STT backend)
+        log(f"loading whisper model {name} (first use downloads it)")
+        _MODEL = WhisperModel(name, device="cpu", compute_type="int8", cpu_threads=os.cpu_count())
+    return _MODEL
+
+
+def transcribe_local(path, model_name):
+    m = whisper_model(model_name)
+    segs, info = m.transcribe(str(path), beam_size=5, vad_filter=True)
+    return [(s.start, s.text.strip()) for s in segs if s.text.strip()], info.duration
+
+
+def write_transcript(show, ep, lines, glossary, source):
+    tdir = ROOT / show / "transcripts"
+    tdir.mkdir(parents=True, exist_ok=True)
+    name = f"{ep['date']}-{slugify(ep['title'])}"
+    body = "\n".join(f"[{stamp(t)}] {txt}" for t, txt in lines)
+    (tdir / f"{name}.raw.txt").write_text(body, encoding="utf-8")
+    fixed = apply_glossary(body, glossary)
+    head = (f"# {ep['title']}\n\n"
+            f"- Date: {ep['date']}\n- Duration: {ep['duration']}\n- Episode page: {ep['link']}\n"
+            f"- Transcript source: {source}\n\n")
+    (tdir / f"{name}.md").write_text(head + fixed + "\n", encoding="utf-8")
+    return str(tdir / f"{name}.md"), len(fixed.split())
+
+
+# ----------------------------------------------------------------------------- run
+
+def run(show, feed, since, until, model, keep_audio, limit):
+    feed = resolve(feed)
+    log(f"feed: {feed}")
+    items = parse_feed(fetch(feed).decode("utf-8", "replace"))
+    window = [i for i in items if i["date"] and since <= i["date"] <= until]
+    log(f"{len(items)} episodes in feed, {len(window)} in window {since}..{until}")
+    rows = load_ledger(show)
+    for i in window:
+        rows.setdefault(i["guid"], {**i, "status": "queued"})
+        rows[i["guid"]].update({k: i[k] for k in ("title", "date", "duration", "audio", "link", "transcript_url", "transcript_type")})
+    save_ledger(show, rows)
+    glossary = load_glossary(show)
+    todo = [r for r in sorted(rows.values(), key=lambda o: o["date"], reverse=True) if r["status"] != "done"][: limit or None]
+    log(f"{len(todo)} to transcribe, {sum(1 for r in rows.values() if r['status'] == 'done')} already done")
+    adir = ROOT / show / "audio"
+    adir.mkdir(parents=True, exist_ok=True)
+    for n, ep in enumerate(todo, 1):
+        t0 = time.time()
+        try:
+            if ep.get("transcript_url"):
+                lines = transcript_from_feed(ep["transcript_url"], ep.get("transcript_type", ""))
+                source = f"publisher transcript ({ep['transcript_url']})"
+            else:
+                mp3 = adir / f"{ep['date']}-{slugify(ep['title'])}.mp3"
+                if not mp3.exists() or mp3.stat().st_size < 100_000:
+                    log(f"[{n}/{len(todo)}] downloading {ep['date']} {ep['title'][:60]}")
+                    mp3.write_bytes(fetch(ep["audio"], timeout=600))
+                log(f"[{n}/{len(todo)}] transcribing {ep['date']} {ep['title'][:60]} ({ep['duration']})")
+                lines, dur = transcribe_local(mp3, model)
+                source = f"local faster-whisper {model}"
+                if not keep_audio:
+                    mp3.unlink(missing_ok=True)
+            path, words = write_transcript(show, ep, lines, glossary, source)
+            ep.update({"status": "done", "transcript": path, "words": words, "source": source,
+                       "transcribed_at": dt.datetime.now().isoformat(timespec="seconds")})
+            log(f"    done: {words:,} words in {time.time() - t0:.0f}s → {Path(path).name}")
+        except Exception as e:
+            ep.update({"status": "failed", "error": f"{type(e).__name__}: {e}"})
+            log(f"    FAILED: {ep['error']}")
+        save_ledger(show, rows)
+    status(show)
+
+
+def status(show):
+    rows = load_ledger(show)
+    if not rows:
+        print(f"{show}: no ledger"); return
+    by = {}
+    for r in rows.values():
+        by[r["status"]] = by.get(r["status"], 0) + 1
+    dates = sorted(r["date"] for r in rows.values())
+    words = sum(r.get("words", 0) for r in rows.values())
+    print(f"{show}: {len(rows)} episodes {dates[0]}..{dates[-1]} | " + ", ".join(f"{k} {v}" for k, v in sorted(by.items())) + f" | {words:,} transcript words")
+    for r in rows.values():
+        if r["status"] == "failed":
+            print(f"  failed: {r['date']} {r['title'][:60]} — {r.get('error')}")
+
+
+def reglossary(show):
+    glossary = load_glossary(show)
+    tdir = ROOT / show / "transcripts"
+    n = 0
+    for raw in sorted(tdir.glob("*.raw.txt")):
+        md = raw.with_name(raw.name[:-len(".raw.txt")] + ".md")
+        if not md.exists():
+            continue
+        head = md.read_text(encoding="utf-8").split("\n\n", 2)
+        head = "\n\n".join(head[:2]) + "\n\n"
+        md.write_text(head + apply_glossary(raw.read_text(encoding="utf-8"), glossary) + "\n", encoding="utf-8")
+        n += 1
+    log(f"glossary re-applied to {n} transcripts ({len(glossary)} rules)")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("cmd", choices=["search", "resolve", "run", "status", "reglossary"])
+    ap.add_argument("target", help="show name (search), url (resolve) or show slug")
+    ap.add_argument("--feed")
+    ap.add_argument("--since", default=(dt.date.today() - dt.timedelta(days=365)).isoformat())
+    ap.add_argument("--until", default=dt.date.today().isoformat())
+    ap.add_argument("--model", default="large-v3-turbo")
+    ap.add_argument("--keep-audio", action="store_true")
+    ap.add_argument("--limit", type=int, default=0, help="transcribe at most N episodes this run (newest first)")
+    a = ap.parse_args()
+    if a.cmd == "search":
+        hits = search(a.target)
+        if not hits:
+            sys.exit(f"no podcast found for '{a.target}'")
+        for n, h in enumerate(hits, 1):
+            print(f"{n}. {h['name']} — {h['author']} ({h['episodes']} episodes, {h['genre']})\n   feed: {h['feed']}\n   apple: {h['apple']}")
+    elif a.cmd == "resolve":
+        print(resolve(a.target))
+    elif a.cmd == "run":
+        if not a.feed:
+            ap.error("--feed required")
+        run(slugify(a.target, 40), a.feed, a.since, a.until, a.model, a.keep_audio, a.limit)
+    elif a.cmd == "status":
+        status(slugify(a.target, 40))
+    else:
+        reglossary(slugify(a.target, 40))
+
+
+if __name__ == "__main__":
+    main()

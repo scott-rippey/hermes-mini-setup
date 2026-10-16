@@ -88,7 +88,7 @@ slides) and why.
 
 ```
 python ~/.hermes/skills/productivity/instagram-coach-research/scripts/ig_synthesize.py digest <handle> --since YYYY-MM-DD
-python ~/.hermes/skills/productivity/instagram-coach-research/scripts/ig_synthesize.py final --handles a,b --app <app-slug> --ours "<our program name>" --subject "<email subject>" --topic "<what the operator asked>"
+python ~/.hermes/skills/productivity/instagram-coach-research/scripts/ig_synthesize.py final --handles a,b --app <app slug, name, repo or alias> --ours "<our program name>" --subject "<email subject>" --topic "<what the operator asked>"
 ```
 `digest` turns each coach-month of the ledger into METHODOLOGY NOTES (one no-tools agent
 call per month, a few in parallel, every claim cited `(date · URL)`, prescribed vs promoted

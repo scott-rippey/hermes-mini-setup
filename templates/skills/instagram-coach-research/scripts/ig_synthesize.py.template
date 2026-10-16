@@ -109,7 +109,9 @@ def digest(handle, since, parallel):
 
 def kb_docs(app_slug, hints):
     q = ("SELECT d.path, d.content FROM memory_documents d JOIN apps a ON a.id=d.app_id "
-         "WHERE a.slug=:'slug' AND d.status='active' AND (" +
+         "WHERE (lower(a.slug)=lower(:'slug') OR lower(a.name)=lower(:'slug') OR lower(coalesce(a.repo,''))=lower(:'slug') "
+         "OR EXISTS (SELECT 1 FROM unnest(a.aliases) al WHERE lower(al)=lower(:'slug'))) "  # slug, name, repo or any alias — same rule as the KB server's _resolve_app
+         "AND d.status='active' AND (" +
          " OR ".join(f"d.path ILIKE '%{h}%'" for h in hints) + ") ORDER BY length(d.content) DESC")
     r = subprocess.run([PSQL, "-d", PGDATABASE, "-At", "-F", "\x1f", "-R", "\x1e", "-v", f"slug={app_slug}"],
                        input=q, capture_output=True, text=True, timeout=60)

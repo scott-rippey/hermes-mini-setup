@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Distill stage for the podcast-research skill — map-reduce over the transcripts.
+
+Stage 1 `episode`: each finished transcript goes to the agent model in a FRESH context
+(`hermes -z`, no tools) together with the operator's BRIEF (what to keep, what to skip,
+what the research is for) and comes back as EPISODE NOTES — every claim cited
+(episode date · mm:ss) — saved to ~/{{AGENT_SLUG}}-outputs/podcast-research/<show>/notes/.
+Resumable (existing notes kept); a few episodes run in parallel.
+
+Stage 2 `final`: writes a prompt with every notes file (+ optionally the operator's own
+app docs from the KB, for a comparison) and runs ONE agent turn WITH tools that writes
+the synthesis, exports it with deliverable-export (branded DOCX/PDF, emailed), posts a
+Slack summary and prints FINAL_RESULT. Filing to the KB stays an OFFER.
+
+Usage:
+  pod_distill.py episode <show> --brief <file> [--parallel 3]
+  pod_distill.py final <show> --brief <file> --subject "<email subject>" --topic "<what the operator asked>" [--app <app-slug> --ours "<program name>" --kb-hints a,b]
+"""
+import argparse
+import concurrent.futures as cf
+import re
+import datetime as dt
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+HOME = Path.home()
+HERMES = HOME / ".local/bin/hermes"
+ROOT = HOME / "{{AGENT_SLUG}}-outputs/podcast-research"
+PSQL = "/opt/homebrew/bin/psql"
+PGDATABASE = "{{KB_DB_NAME}}"
+ENV = {**os.environ, "HOME": str(HOME),
+       "PATH": "/opt/homebrew/bin:" + str(HOME / ".local/bin") + ":" + str(HOME / ".hermes/bin") + ":/usr/bin:/bin:/usr/sbin:/sbin"}
+
+
+def log(msg):
+    print(f"[{dt.datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def hermes_oneshot(prompt, timeout=900):
+    r = subprocess.run([str(HERMES), "-z", prompt], capture_output=True, text=True, timeout=timeout, env=ENV)
+    return r.stdout or ""
+
+
+def episodes(show):
+    p = ROOT / show / "episodes.jsonl"
+    if not p.exists():
+        sys.exit(f"no ledger for {show} — run pod_capture.py first")
+    return [json.loads(l) for l in p.read_text(encoding="utf-8").split("\n") if l.strip()]
+
+
+# ----------------------------------------------------------------------------- stage 1
+
+EPISODE_PROMPT = """You are distilling ONE podcast episode into EPISODE NOTES for the operator. Do NOT use any tools — work only from the TRANSCRIPT below (automatic speech-to-text: expect occasional misheard words; keep the speaker's meaning, never invent).
+
+THE OPERATOR'S BRIEF (what to keep, what to skip, what this research is for — follow it exactly):
+{brief}
+
+Write dense markdown notes a domain expert could rely on. Organise them under headings that fit the brief (omit headings the episode has nothing on). Rules:
+- Keep what the brief says to keep; drop what it says to drop (small talk, ads, housekeeping, anything off-topic).
+- After EVERY claim put a citation in the form ({date} · mm:ss) using the transcript timestamps.
+- Quote verbatim when the exact wording carries the point; otherwise summarise tightly.
+- Separate what a speaker PRESCRIBES / recommends from what they merely mention or sell.
+- Note the guest (if any) and who says what when it matters.
+- End with "Episode in one breath" — 3 lines max — and a "Worth stealing" list of the 1-5 most actionable ideas for the operator, each cited.
+
+Output ONLY the markdown wrapped EXACTLY between <!--NOTES--> and <!--/NOTES-->.
+
+SHOW: {show_name}
+EPISODE: {title} ({date}, {duration})
+TRANSCRIPT:
+{transcript}"""
+
+
+def notes_one(show, ep, brief, show_name):
+    out = ROOT / show / "notes" / (Path(ep["transcript"]).stem + ".md")
+    if out.exists() and out.stat().st_size > 200:
+        return ep["date"], "kept"
+    transcript = Path(ep["transcript"]).read_text(encoding="utf-8")
+    text = hermes_oneshot(EPISODE_PROMPT.format(brief=brief, date=ep["date"], title=ep["title"], show_name=show_name,
+                                                duration=ep.get("duration", ""), transcript=transcript))
+    a, b = text.find("<!--NOTES-->"), text.find("<!--/NOTES-->")
+    if a < 0 or b < 0:
+        return ep["date"], "FAILED (no NOTES block)"
+    body = text[a + len("<!--NOTES-->"):b].strip()
+    body = re.sub(r"^#\s[^\n]*\n+", "", body)  # the file already carries the title
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(f"# {ep['title']} — {ep['date']}\n\n{body}\n", encoding="utf-8")
+    return ep["date"], f"ok ({len(body)} chars)"
+
+
+def episode(show, brief_file, parallel, show_name):
+    brief = Path(brief_file).read_text(encoding="utf-8").strip()
+    done = [e for e in episodes(show) if e.get("status") == "done" and e.get("transcript")]
+    log(f"distilling {show}: {len(done)} transcripts, {parallel} in parallel")
+    with cf.ThreadPoolExecutor(max_workers=parallel) as ex:
+        for date, res in ex.map(lambda e: notes_one(show, e, brief, show_name), done):
+            log(f"  {date}: {res}")
+
+
+# ----------------------------------------------------------------------------- stage 2
+
+def kb_docs(app_slug, hints):
+    q = ("SELECT d.path, d.content FROM memory_documents d JOIN apps a ON a.id=d.app_id "
+         "WHERE a.slug=:'slug' AND d.status='active' AND (" +
+         " OR ".join(f"d.path ILIKE '%{h}%'" for h in hints) + ") ORDER BY length(d.content) DESC")
+    r = subprocess.run([PSQL, "-d", PGDATABASE, "-At", "-F", "\x1f", "-R", "\x1e", "-v", f"slug={app_slug}"],
+                       input=q, capture_output=True, text=True, timeout=60)
+    docs = []
+    for row in r.stdout.split("\x1e"):
+        if "\x1f" in row:
+            path, content = row.split("\x1f", 1)
+            docs.append((path.strip(), content))
+    return docs
+
+
+FINAL_PROMPT = """Use the podcast-research skill, step 4 (Synthesis) — skill_view it first and follow it. The operator asked for: {topic}
+
+THE OPERATOR'S BRIEF (what matters and what to ignore — it governs the whole report):
+{brief}
+
+COVERAGE: {show} — {n_notes} episodes distilled, {date_min}..{date_max}. State this in the report; an episode that is silent on a topic is a real gap, not missing data.
+
+INPUTS (all on disk; read them with read_file — they are long, page through):
+- Episode notes (one file per episode, every claim cited (date · mm:ss)): {notes_list}
+{ours_block}- Full transcripts, only if you need to verify a quote: {transcript_dir}
+
+Produce the synthesis as a complete markdown report saved to {report_md} — structure: executive summary (half a page, the 5 things that matter most to the brief) · the recurring themes and principles across episodes, each with the strongest cited evidence (date · mm:ss), prescribed vs merely mentioned kept apart · where speakers CONTRADICT themselves or each other · {compare_clause}· a "Worth stealing" list ranked by value to the operator · an appendix of the best verbatim quotes with citations. Be specific and honest; say where the material is thin.
+
+Then follow the deliverable-export skill: a branded PDF (no DOCX) from that markdown, and email the PDF to the operator ({owner_email}, subject "{subject}"). Copy the markdown AND the PDF into {deliver_dir} (create it if needed) under the names {deliver_stem}.md / {deliver_stem}.pdf — that folder is the ONLY deliverable; notes and transcripts stay where they are. Post a short summary (the executive summary's 5 points + where the files are) to Slack channel {slack} with `hermes send`. Finally print exactly one line: FINAL_RESULT: <ok|partial|failed> <report path> <pdf path>. Do NOT write to the KB — the operator decides whether to file it."""
+
+
+def final(show, brief_file, topic, subject, owner_email, app_slug, ours, hints):
+    brief = Path(brief_file).read_text(encoding="utf-8").strip()
+    stamp = dt.date.today().isoformat()
+    outdir = ROOT / show / "synthesis"
+    outdir.mkdir(parents=True, exist_ok=True)
+    notes = sorted((ROOT / show / "notes").glob("*.md"))
+    if not notes:
+        sys.exit("no notes yet — run the episode stage first")
+    dates = sorted(n.name[:10] for n in notes)
+    ours_block, compare_clause = "", ""
+    if app_slug:
+        docs = kb_docs(app_slug, hints)
+        kb_file = outdir / f"kb-{app_slug}-{stamp}.md"
+        kb_file.write_text("\n\n".join(f"<!-- KB doc: {p} -->\n# {p}\n\n{c}" for p, c in docs), encoding="utf-8")
+        log(f"KB export: {len(docs)} docs, {kb_file.stat().st_size // 1000} KB → {kb_file}")
+        ours_block = f"- The operator's own documented approach ({ours}; the {app_slug} app docs exported from the KB): {kb_file}\n"
+        compare_clause = f"where OUR program ({ours}) ALIGNS, where it DIFFERS, what it already handles better, and blind spots worth considering — every claim about our program cited to the KB doc path "
+    slack = ""
+    for line in (HOME / ".hermes/.env").read_text().splitlines():
+        if line.startswith("SLACK_HOME_CHANNEL="):
+            slack = line.split("=", 1)[1].strip()
+    report_md = outdir / f"{show}-synthesis-{stamp}.md"
+    deliver_dir = ROOT / "deliverables"
+    deliver_dir.mkdir(exist_ok=True)
+    prompt = FINAL_PROMPT.format(topic=topic, brief=brief, show=show, n_notes=len(notes), date_min=dates[0], date_max=dates[-1],
+                                 notes_list=", ".join(str(n) for n in notes), ours_block=ours_block,
+                                 transcript_dir=ROOT / show / "transcripts", report_md=report_md, compare_clause=compare_clause,
+                                 ours=ours, owner_email=owner_email, subject=subject, slack=slack or "the home channel",
+                                 deliver_dir=deliver_dir, deliver_stem=f"{show}-synthesis-{stamp}")
+    (outdir / f"final-prompt-{stamp}.txt").write_text(prompt, encoding="utf-8")
+    log(f"final synthesis: {len(notes)} notes; running the agent turn (this takes a while)")
+    out = hermes_oneshot(prompt, timeout=3600)
+    (outdir / f"final-output-{stamp}.txt").write_text(out, encoding="utf-8")
+    res = [l for l in out.splitlines() if l.startswith("FINAL_RESULT:")]
+    log(res[-1] if res else "FINAL_RESULT missing — see final-output file")
+    return res[-1] if res else None
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("cmd", choices=["episode", "final"])
+    ap.add_argument("show")
+    ap.add_argument("--brief", required=True, help="markdown file: what to keep / skip / what the research is for")
+    ap.add_argument("--show-name", default="", help="show title + hosts, e.g. '<Show Name> (hosts <host names>)'")
+    ap.add_argument("--parallel", type=int, default=3)
+    ap.add_argument("--topic", default="a distilled synthesis of this podcast against the brief")
+    ap.add_argument("--subject", default="Podcast research synthesis")
+    ap.add_argument("--owner-email", default=os.environ.get("POD_OWNER_EMAIL", "{{OPERATOR_EMAIL}}"))
+    ap.add_argument("--app", help="optional: app slug whose KB docs are our own approach, for a comparison")
+    ap.add_argument("--ours", default="our program")
+    ap.add_argument("--kb-hints", default="PROGRAMMING-DECISIONS,GENERATION-ENGINE,FRAMEWORKS-PLUMBING,PHASE-12,MOVEMENT-LIBRARY,CLAUDE.md")
+    a = ap.parse_args()
+    if a.cmd == "episode":
+        episode(a.show, a.brief, a.parallel, a.show_name or a.show)
+    else:
+        final(a.show, a.brief, a.topic, a.subject, a.owner_email, a.app, a.ours, [h for h in a.kb_hints.split(",") if h])
+
+
+if __name__ == "__main__":
+    main()
