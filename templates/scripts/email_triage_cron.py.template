@@ -34,6 +34,9 @@ from pathlib import Path
 HOME = Path.home()
 PY = str(HOME / ".hermes/hermes-agent/venv/bin/python")
 HERMES = str(HOME / ".local/bin/hermes")
+# Tool-less headless call: this prompt carries third-party content (email), so the toolset is
+# restricted in the CLI to a zero-tool set — enforcement, not a prose "do not use tools".
+NO_TOOLS = ["-t", "context_engine"]
 GATHER = str(HOME / ".hermes/skills/productivity/email-triage/scripts/triage_gather.py")
 GAPI = str(HOME / ".hermes/skills/productivity/google-workspace/scripts/google_api.py")
 PSQL = "/opt/homebrew/bin/psql"
@@ -186,7 +189,7 @@ def judge(items):
            "PATH": "/opt/homebrew/bin:" + str(HOME / ".local/bin") + ":" + str(HOME / ".hermes/bin")
                    + ":/usr/bin:/bin:/usr/sbin:/sbin"}
     try:
-        r = subprocess.run([HERMES, "-z", prompt], capture_output=True, text=True, timeout=300, env=env)
+        r = subprocess.run([HERMES, *NO_TOOLS, "-z", prompt], capture_output=True, text=True, timeout=300, env=env)
     except Exception as e:
         log(f"judge call failed: {e}")
         return None
