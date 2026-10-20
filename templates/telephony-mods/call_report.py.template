@@ -31,6 +31,9 @@ import telephony  # our installed copy
 
 HOME = Path.home()
 HERMES = str(HOME / ".hermes/hermes-agent/venv/bin/hermes")
+# Tool-less headless call: these prompts carry third-party content (transcripts / captions / call audio),
+# so the toolset is restricted in the CLI to a zero-tool set — enforcement, not a prose "do not use tools".
+NO_TOOLS = ["-t", "context_engine"]
 HERMES_SEND = str(HOME / ".local/bin/hermes")
 PY = str(HOME / ".hermes/hermes-agent/venv/bin/python")
 GAPI = str(HOME / ".hermes/skills/productivity/google-workspace/scripts/google_api.py")
@@ -160,7 +163,7 @@ def synthesize(context, transcript, meta_line):
         "Return ONLY the two marked blocks."
     )
     try:
-        r = subprocess.run([HERMES, "-z", prompt], capture_output=True, text=True, timeout=300)
+        r = subprocess.run([HERMES, *NO_TOOLS, "-z", prompt], capture_output=True, text=True, timeout=300)
         out = r.stdout or ""
     except Exception:
         return "", ""

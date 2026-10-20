@@ -28,6 +28,9 @@ from pathlib import Path
 
 HOME = Path.home()
 HERMES = HOME / ".local/bin/hermes"
+# Tool-less headless call: these prompts carry third-party content (transcripts / captions / call audio),
+# so the toolset is restricted in the CLI to a zero-tool set — enforcement, not a prose "do not use tools".
+NO_TOOLS = ["-t", "context_engine"]
 LEDGER = Path(__file__).resolve().parent / "ig_ledger.py"
 ROOT = HOME / "{{AGENT_SLUG}}-outputs/ig-research"
 PSQL = "/opt/homebrew/bin/psql"
@@ -51,8 +54,9 @@ def months(since):
     return out
 
 
-def hermes_oneshot(prompt, timeout=900):
-    r = subprocess.run([str(HERMES), "-z", prompt], capture_output=True, text=True, timeout=timeout, env=ENV)
+def hermes_oneshot(prompt, timeout=900, tools=False):
+    cmd = [str(HERMES), *([] if tools else NO_TOOLS), "-z", prompt]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=ENV)
     return r.stdout or ""
 
 
@@ -169,7 +173,7 @@ def final(handles, app_slug, topic, since, ours, subject, owner_email, hints):
                                  report_md=report_md, slack=slack or "the home channel")
     (outdir / f"final-prompt-{stamp}.txt").write_text(prompt)
     log(f"final synthesis: {len(digests)} digests; running the agent turn (this takes a while)")
-    out = hermes_oneshot(prompt, timeout=3600)
+    out = hermes_oneshot(prompt, timeout=3600, tools=True)  # final stage: KB export + deliverable-export + Slack
     (outdir / f"final-output-{stamp}.txt").write_text(out)
     res = [l for l in out.splitlines() if l.startswith("FINAL_RESULT:")]
     log(res[-1] if res else "FINAL_RESULT missing — see final-output file")

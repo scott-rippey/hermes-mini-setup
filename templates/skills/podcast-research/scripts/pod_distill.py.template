@@ -28,6 +28,9 @@ from pathlib import Path
 
 HOME = Path.home()
 HERMES = HOME / ".local/bin/hermes"
+# Tool-less headless call: these prompts carry third-party content (transcripts / captions / call audio),
+# so the toolset is restricted in the CLI to a zero-tool set — enforcement, not a prose "do not use tools".
+NO_TOOLS = ["-t", "context_engine"]
 ROOT = HOME / "{{AGENT_SLUG}}-outputs/podcast-research"
 PSQL = "/opt/homebrew/bin/psql"
 PGDATABASE = "{{KB_DB_NAME}}"
@@ -39,8 +42,9 @@ def log(msg):
     print(f"[{dt.datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def hermes_oneshot(prompt, timeout=900):
-    r = subprocess.run([str(HERMES), "-z", prompt], capture_output=True, text=True, timeout=timeout, env=ENV)
+def hermes_oneshot(prompt, timeout=900, tools=False):
+    cmd = [str(HERMES), *([] if tools else NO_TOOLS), "-z", prompt]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=ENV)
     return r.stdout or ""
 
 
@@ -163,7 +167,7 @@ def final(show, brief_file, topic, subject, owner_email, app_slug, ours, hints):
                                  deliver_dir=deliver_dir, deliver_stem=f"{show}-synthesis-{stamp}")
     (outdir / f"final-prompt-{stamp}.txt").write_text(prompt, encoding="utf-8")
     log(f"final synthesis: {len(notes)} notes; running the agent turn (this takes a while)")
-    out = hermes_oneshot(prompt, timeout=3600)
+    out = hermes_oneshot(prompt, timeout=3600, tools=True)  # final stage: KB export + deliverable-export + Slack
     (outdir / f"final-output-{stamp}.txt").write_text(out, encoding="utf-8")
     res = [l for l in out.splitlines() if l.startswith("FINAL_RESULT:")]
     log(res[-1] if res else "FINAL_RESULT missing — see final-output file")
