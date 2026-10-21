@@ -251,7 +251,7 @@ def judge(items, avail=""):
         "A reply must MOVE THE THREAD FORWARD: answer what was asked, make a concrete proposal, or name the specific "
         "thing you need from them. NEVER bounce the sender's own question back (they ask 'what works for you?' — you "
         "propose; you never reply 'what works for you?'). For any scheduling ask, propose TWO specific slots (day + time, "
-        "{{TIMEZONE}}) taken from {{OPERATOR_FIRST_NAME}}'S AVAILABILITY and offer to send an invite; if no availability block is present, say "
+        "{{TIMEZONE}}) taken from {{OPERATOR_FIRST_NAME}}'S AVAILABILITY, each starting so the whole call ends inside the open window (30 minutes unless the ask implies longer), and offer to send an invite; if no availability block is present, say "
         "{{OPERATOR_FIRST_NAME}} will follow up with a couple of times.\n\n"
         + (f"{{OPERATOR_FIRST_NAME}}'S AVAILABILITY (open windows, {WORK_HOURS[0]}am–{WORK_HOURS[1] - 12}pm {{TIMEZONE}}, next {AVAIL_DAYS} "
            f"business days; all-day calendar entries ignored):\n{avail}\n\n" if avail else "") +

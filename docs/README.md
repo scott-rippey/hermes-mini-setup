@@ -18,3 +18,4 @@ The installer (root `CLAUDE.md`) references these per phase; the operator keeps 
 | [telephony.md](telephony.md) | Outbound calls: approvals, reports, the neutered inbound | 10 |
 | [proposal-esign.md](proposal-esign.md) | Proposals & contracts via SignWell: send-card gate, contract mode, the collection poller | 10b |
 | [operations.md](operations.md) | The operator's runbook: rhythm, ceremonies, troubleshooting | 11 → forever |
+| [hardening-prompt-2026-10-20.md](hardening-prompt-2026-10-20.md) | Paste-in prompt for an existing install: makes the headless email/transcript jobs tool-less (version gate, skip-if-absent, verification) | existing installs |
