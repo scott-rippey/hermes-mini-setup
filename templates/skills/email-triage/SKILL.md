@@ -56,6 +56,13 @@ For each item {{OPERATOR_FIRST_NAME}} asks to draft:
 2. **Voice match:** mirror how {{OPERATOR_FIRST_NAME}} writes to THIS person (register, greeting,
    sign-off, brevity) from the history you just pulled; his general style notes are
    in USER.md. Match the operator's register from the history you pulled — when in doubt, shorter.
+   **A draft must move the thread forward:** answer what was asked, make a concrete
+   proposal, or name the specific thing you need — never bounce the sender's own question
+   back ("what works for you?" gets two proposed slots, never "what works for you?").
+   For a scheduling ask, read {{OPERATOR_FIRST_NAME}}'s calendar first (`google_api.py calendar list`,
+   next 7 business days, working hours) and propose two specific day + time slots, offering
+   to send the invite. The cron does the same from a deterministic availability block
+   (`availability()` in `email_triage_cron.py`).
 3. **Propose in chat:** show the draft text in Slack and wait. {{OPERATOR_FIRST_NAME}} may edit,
    approve, or drop it.
 4. **On his explicit go**, place it as a reply draft:
