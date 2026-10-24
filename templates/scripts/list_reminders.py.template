@@ -2,7 +2,11 @@
 # (backs the /reminders quick command)
 
 #!/usr/bin/env python3
-"""List pending platform-cron reminders (for the /reminders quick command)."""
+"""List platform-cron reminders (for the /reminders quick command).
+
+Hermes v0.22+ keeps finished one-shots in jobs.json for cron.completed_retention_days
+(default 7) so their final status stays inspectable; they are shown separately, not as pending.
+"""
 import json
 from pathlib import Path
 
@@ -13,10 +17,21 @@ except Exception as e:
     print(f"jobs.json unreadable: {e}")
     raise SystemExit(0)
 jobs = d.get("jobs", []) if isinstance(d, dict) else d
-if not jobs:
+
+
+def finished(j):
+    return j.get("state") == "completed" or j.get("enabled") is False
+
+
+pending = [j for j in jobs if not finished(j)]
+done = [j for j in jobs if finished(j)]
+if not pending:
     print("no pending reminders")
-else:
-    for j in jobs:
-        kind = j.get("schedule", {}).get("kind", "?")
-        flag = "" if kind == "once" else "  ⚠️ RECURRING (rule violation)"
-        print(f"- {j.get('name', j.get('id', '?'))} → {str(j.get('next_run_at', '?'))[:16]}{flag}")
+for j in pending:
+    kind = j.get("schedule", {}).get("kind", "?")
+    flag = "" if kind == "once" else "  ⚠️ RECURRING (rule violation)"
+    print(f"- {j.get('name', j.get('id', '?'))} → {str(j.get('next_run_at', '?'))[:16]}{flag}")
+if done:
+    print(f"recently delivered ({len(done)}, kept 7 days by Hermes):")
+    for j in done:
+        print(f"  ✓ {j.get('name', j.get('id', '?'))} → {str(j.get('last_run_at', '?'))[:16]} ({j.get('last_status') or '?'})")

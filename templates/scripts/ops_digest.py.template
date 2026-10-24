@@ -307,9 +307,14 @@ def docs_repo_row():
 
 
 def gateway_row():
-    r = subprocess.run(["/usr/bin/pgrep", "-f", "hermes_cli.main gateway run"],
+    # launchd owns the gateway (label from `hermes gateway install`); ask it for the pid first.
+    # Hermes v0.22's launcher has no `hermes_cli.main gateway run` command line, so pgrep is only
+    # the fallback for older installs.
+    r = subprocess.run(["/bin/launchctl", "print", f"gui/{os.getuid()}/ai.hermes.gateway"],
                        capture_output=True, text=True)
-    pids = r.stdout.split()
+    m = re.search(r"^\s*pid = (\d+)", r.stdout, re.M)
+    pids = [m.group(1)] if m else subprocess.run(["/usr/bin/pgrep", "-f", "hermes_cli.main gateway run"],
+                                                 capture_output=True, text=True).stdout.split()
     when = _last_run_when(LOGS / "gateway.log")
     if not pids:
         return ("Gateway", "always-on", "fail", "process NOT running", when)
@@ -318,7 +323,7 @@ def gateway_row():
 
 def platform_cron_row():
     """In-gateway (agent-created) cron watch. Sanctioned use: ONE-SHOT reminders
-    only, created via the cronjob tool and auto-deleted by Hermes after firing.
+    only, created via the cronjob tool; Hermes v0.22+ keeps finished ones for 7 days, older versions delete them.
     A recurring job here means the one-shot-only rule was bypassed — flag it."""
     path = HOME / ".hermes" / "cron" / "jobs.json"
     label, sched = "Platform cron (reminders)", "agent-created"
@@ -334,6 +339,8 @@ def platform_cron_row():
         return (label, sched, "ok", "empty — no pending reminders", when)
     def name(j):
         return j.get("name") or j.get("id", "?")
+    # v0.22+ keeps finished one-shots for cron.completed_retention_days (default 7): count them apart.
+    done = [j for j in jobs if j.get("state") == "completed" or j.get("enabled") is False]
     recurring = [j for j in jobs if j.get("schedule", {}).get("kind") != "once"]
     if recurring:
         return (label, sched, "fail",
@@ -345,9 +352,13 @@ def platform_cron_row():
         return (label, sched, "fail",
                 ("reminder(s) in error state: "
                  + ", ".join(name(j) for j in errored))[:140], when)
+    pending = [j for j in jobs if j not in done]
+    if not pending:
+        return (label, sched, "ok", f"no pending reminders · {len(done)} delivered (kept 7d)", when)
     return (label, sched, "ok",
-            (f"{len(jobs)} pending one-shot reminder(s): "
-             + ", ".join(name(j) for j in jobs))[:140], when)
+            (f"{len(pending)} pending one-shot reminder(s): "
+             + ", ".join(name(j) for j in pending)
+             + (f" · {len(done)} delivered" if done else ""))[:140], when)
 
 
 def cron_health():
