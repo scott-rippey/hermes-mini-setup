@@ -33,7 +33,7 @@ HOME = Path.home()
 HERMES = str(HOME / ".hermes/hermes-agent/venv/bin/hermes")
 # Tool-less headless call: these prompts carry third-party content (transcripts / captions / call audio),
 # so the toolset is restricted in the CLI to a zero-tool set — enforcement, not a prose "do not use tools".
-NO_TOOLS = ["-t", "context_engine"]
+NO_TOOLS = ["-t", "context_engine,no_mcp"]  # zero tools: v0.22 adds every MCP server to an explicit -t list unless no_mcp is named
 HERMES_SEND = str(HOME / ".local/bin/hermes")
 PY = str(HOME / ".hermes/hermes-agent/venv/bin/python")
 GAPI = str(HOME / ".hermes/skills/productivity/google-workspace/scripts/google_api.py")

@@ -8,7 +8,7 @@ You are hardening a Nous Research Hermes Agent install against prompt injection 
 
 **The problem.** Several launchd jobs run the agent headlessly (`hermes -z "<prompt>"`) with other people's text pasted into the prompt: inbox triage, the agent's own inbox watch, the morning brief, meeting prep, and the post-call report (plus podcast/Instagram research stages if those skills are installed). Each prompt says "Do NOT use any tools", but that is prose. The headless agent still carries the full toolset, and `command_allowlist: [execute_code]` in `~/.hermes/config.yaml` is honored even under `approvals.cron_mode: deny`, so a hidden instruction in an email could in principle reach the shell, the KB tools, or the email tools. The accepted residual risk is that a convincing email can still mislead a summary or a reply draft; the operator reads both and drafts never send. What we close is the tool path.
 
-**The fix (live and tested on the reference build 2026-10-20).** Start those headless calls with a zero-tool toolset. On Hermes v0.21.5 the toolset `context_engine` has zero tools, so `hermes -t context_engine -z "<prompt>"` gives the model no tools at all. Add on top: the email cleaners strip HTML comments and invisible code points, and every prompt marks the outside text as untrusted data.
+**The fix (live and tested on the reference build 2026-10-20).** Start those headless calls with a zero-tool toolset. On Hermes v0.21.5 the toolset `context_engine` has zero tools, so `hermes -t context_engine -z "<prompt>"` gave the model no tools at all there. From Hermes v0.22 on, an explicit `-t` list also gets every enabled MCP server added unless it names the `no_mcp` sentinel, so the call is `hermes -t context_engine,no_mcp -z "<prompt>"` (v0.21.5 accepts the sentinel too, so use it on every version). Add on top: the email cleaners strip HTML comments and invisible code points, and every prompt marks the outside text as untrusted data.
 
 **This install may not have everything named below.** The reference build has the podcast-research and instagram-coach-research skills and the telephony mod; this one may not. For every step: check whether the file exists first, and if it does not, say "not installed, skipped" and move on. Never create a missing script just to patch it.
 
@@ -18,7 +18,7 @@ Work turn-based: do one numbered step, show the result, then continue. Step 0 is
 
 1. **Verify the zero-tool toolset on this box.** Run:
    ```
-   hermes -t context_engine -z "Reply with ONLY the exact names of every tool you currently have available, comma separated. If you have none, reply NONE. Do not call any tool."
+   hermes -t context_engine,no_mcp -z "Reply with ONLY the exact names of every tool you currently have available, comma separated. If you have none, reply NONE. Do not call any tool."
    hermes -z "Reply with ONLY the exact names of every tool you currently have available, comma separated. Do not call any tool."
    ```
    Expected: the first answers `NONE`, the second lists dozens of tools. If `context_engine` is unknown on this version, list the toolset catalog with `cd ~/.hermes/hermes-agent && ~/.local/bin/python -c "import toolsets; T=toolsets.TOOLSETS; print([k for k in T if not T[k].get('tools') and not T[k].get('includes')])"` and use any zero-tool entry instead, re-running the first command to confirm `NONE`. Stop and report if no zero-tool toolset exists.
@@ -29,7 +29,7 @@ Work turn-based: do one numbered step, show the result, then continue. Step 0 is
    ```python
    # Tool-less headless call: this prompt carries third-party content (email), so the toolset is
    # restricted in the CLI to a zero-tool set — enforcement, not a prose "do not use tools".
-   NO_TOOLS = ["-t", "context_engine"]
+   NO_TOOLS = ["-t", "context_engine,no_mcp"]
    ```
    and change `[HERMES, "-z", prompt]` to `[HERMES, *NO_TOOLS, "-z", prompt]`. Keep the existing "Do NOT use any tools" prose; it is harmless and keeps the model from wasting a turn.
 
