@@ -38,7 +38,7 @@ def _agent_model_name():
 
 
 HOME = Path.home()
-PY = str(HOME / ".hermes/hermes-agent/venv/bin/python")
+PY = str(HOME / ".local/bin/python")  # works on every version: v0.22 wrapper, older venv symlink
 HERMES = str(HOME / ".local/bin/hermes")
 # Tool-less headless call: this prompt carries third-party content (email), so the toolset is
 # restricted in the CLI to a zero-tool set — enforcement, not a prose "do not use tools".
@@ -213,7 +213,7 @@ def _osm_route(loc):
     """Fallback: typical drive time via the maps skill (OSM/OSRM). Returns (secs, meters)."""
     for attempt in (1, 2):  # public OSM/OSRM endpoints hiccup occasionally — one retry
         try:
-            # PY (venv 3.11), NOT /usr/bin/python3 — Apple's system python SSL-handshake-fails on OSM hosts
+            # PY (the Hermes Python), NOT /usr/bin/python3 — Apple's system python SSL-handshake-fails on OSM hosts
             r = subprocess.run([PY, MAPS, "distance", HOME_ADDR, "--to", loc,
                                 "--mode", "driving"], capture_output=True, text=True, timeout=60)
             d = json.loads(r.stdout)

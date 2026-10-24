@@ -43,7 +43,7 @@ HOME = Path.home()
 PSQL = "/opt/homebrew/bin/psql"
 DB = "{{KB_DB_NAME}}"
 NS = "{{AGENT_SLUG}}"
-HERMES = str(HOME / ".hermes/hermes-agent/venv/bin/hermes")
+HERMES = str(HOME / ".local/bin/hermes")
 STALE_DAYS = 90
 RESEARCH_AGE_DAYS = 120
 # Near-dup floor: profiles share a template so unrelated ones embed ~0.60-0.75

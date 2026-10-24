@@ -40,7 +40,7 @@ LOGS = HOME / ".hermes" / "logs"
 LOCAL_BACKUP_DIR = HOME / "backups"
 STATE_FILE = HOME / ".hermes" / "scripts" / ".backup_state.json"
 GAPI = str(HOME / ".hermes/skills/productivity/google-workspace/scripts/google_api.py")
-PY = str(HOME / ".hermes/hermes-agent/venv/bin/python")
+PY = str(HOME / ".local/bin/python")  # works on every version: v0.22 wrapper, older venv symlink
 
 # Absolute tool paths (launchd runs with a minimal PATH).
 PG_DUMP = "/opt/homebrew/bin/pg_dump"
@@ -65,16 +65,16 @@ TAR_EXCLUDES = [
     ".hermes/bootstrap-cache", ".hermes/audio_cache", ".hermes/image_cache",
     ".hermes/sandboxes", ".hermes/logs", ".hermes/plugins",
     ".hermes/hermes-setup", ".hermes/models_dev_cache.json",
-    # regenerable tooling/deps (reinstalled, not config): uv/tirith binaries,
-    # scrapling browser-driver venv (~390MB of Playwright/patchright)
-    ".hermes/bin", ".hermes/tools",
+    # regenerable tooling/deps (reinstalled, not config): bundled binaries, the v0.22 package
+    # manager's tool store (tools/: Python, Node, Chromium...) and its dependency generations (installs/)
+    ".hermes/bin", ".hermes/tools", ".hermes/installs",
     # real-profile browser snapshot: Chrome cookies/login DBs re-synced from the live profile on
     # every fresh session — a copy of credentials, not state worth bundling (re-login is a DR step)
     ".hermes/browser-profile",
     # live DBs (snapshotted separately for consistency)
     ".hermes/state.db", ".hermes/state.db-shm", ".hermes/state.db-wal",
     ".hermes/kanban.db", ".hermes/kanban.db-shm", ".hermes/kanban.db-wal",
-    # globs ("*venv*" catches .venv / venv / scrapling-venv)
+    # globs ("*venv*" catches .venv / venv / kokoro-venv)
     "*.lock", "*.log", "*node_modules*", "*__pycache__*", "*venv*", "*.pyc",
 ]
 

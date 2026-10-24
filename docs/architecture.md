@@ -45,7 +45,7 @@ phone (outbound-only, Vapi cloud + Telnyx number)     main model (flat-rate OAut
 - **Slack is the daily driver.** One bot, Socket Mode (an *outbound* websocket — no inbound listener), **allowlisted to the operator's member ID**. Channels = personas via `slack.channel_prompts` (the single canonical home for persona text): `#general` (chief of staff — SOUL itself), `#research` (present-then-file, KB-first), `#proposals-contracts` (playbook drafter — proposal AND contract modes, never sends). Inline replies.
 - **Dashboard** (localhost only) — live sessions and the command panel. **CLI/TUI** on the box for admin.
 - **Phone** (optional) — outbound-only via Vapi (call agent on `gpt-4.1`, your own ElevenLabs voice if you like) from a Telnyx number imported into Vapi ([telephony.md](telephony.md)). The number's inbound side is an announce-and-hangup hook in Vapi's cloud with no assistant; nothing phone-shaped can reach the box.
-- **Sessions reset daily at 4am** (or 24h idle) — every morning starts fresh, which is how SOUL/config changes land automatically.
+- **Sessions last until `/new`** (v0.22 retired timed resets; compression keeps long chats bounded) — after a SOUL/persona change, `/new` in each affected channel.
 
 ## Data stores — one home per kind of fact
 

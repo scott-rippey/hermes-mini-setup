@@ -33,7 +33,7 @@ def _agent_model_name():
 
 
 HOME = Path.home()
-PY = str(HOME / ".hermes/hermes-agent/venv/bin/python")
+PY = str(HOME / ".local/bin/python")  # works on every version: v0.22 wrapper, older venv symlink
 HERMES = str(HOME / ".local/bin/hermes")
 # Tool-less headless call: this prompt carries third-party content (email), so the toolset is
 # restricted in the CLI to a zero-tool set — enforcement, not a prose "do not use tools".
@@ -44,7 +44,8 @@ MANIFEST = HOME / ".hermes/skills/productivity/granola-meeting-reports/state/pen
 
 # Audio brief (optional, Kokoro local TTS): a spoken, LIGHTER cut of the brief attached
 # as m4a. SOFT dependency — no kokoro venv / model / render => email ships without audio.
-# Install: python3.11 -m venv ~/.hermes/kokoro-venv && pip install mlx-audio "misaki[en]"
+# Install: brew install python@3.11 && /opt/homebrew/bin/python3.11 -m venv ~/.hermes/kokoro-venv && ~/.hermes/kokoro-venv/bin/pip install mlx-audio "misaki[en]"
+# (its own venv on purpose: misaki needs Python < 3.13, while Hermes v0.22 runs on 3.14)
 KOKORO_PY = str(HOME / ".hermes/kokoro-venv/bin/python")
 KOKORO_MODEL = "mlx-community/Kokoro-82M-bf16"
 KOKORO_VOICE = "af_heart"  # 54 voices ship with the model — af_*/am_* American, bf_/bm_ British, ...

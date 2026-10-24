@@ -15,7 +15,7 @@ Every `{{PLACEHOLDER}}` used across `templates/`, and where its value comes from
 | `{{DOCS_REPO_DIR}}` | Local dir of their build-docs repo (under `~`) | "agent-setup" |
 | `{{PRIVATE_DOCS_REMOTE}}` | Their **private** GitHub repo for docs self-push | owner/agent-backup |
 | `{{CC_MEMORY_DIR}}` | Claude Code project-memory dir (machine-specific, under `~/.claude/projects/…/memory`) | — |
-| `{{HOME}}` / `{{HERMES_VENV_PYTHON}}` | Absolute home dir / the platform venv python | /Users/… |
+| `{{HOME}}` | Absolute home dir (scripts and jobs call `{{HOME}}/.local/bin/python` and `~/.local/bin/hermes`, never a venv path) | /Users/… |
 | `{{MAC_USERNAME}}` | The dedicated macOS user created in Phase 1 (appears in absolute paths, e.g. the mcp-rag `config.yaml` wiring) | "agentbox" |
 | `{{JOB}}` / `{{SCRIPT}}` / `{{HOUR}}` / `{{MINUTE}}` | launchd instantiation values (schedule table in job.plist.template) | — |
 | `{{BUSINESS_LEGAL_NAME}}` | The exact registered contracting entity (contract skeleton — confirm suffix with the operator) | "Acme Automation, LLC" |
@@ -23,6 +23,11 @@ Every `{{PLACEHOLDER}}` used across `templates/`, and where its value comes from
 | `{{TIMEZONE}}` / `{{LOCATION}}` | From the interview | — |
 | `{{ROLE}}` / `{{BACKGROUND_BRIEF}}` / `{{WORK_TYPES}}` / `{{STACK_LIST}}` / `{{QUALITY_BAR}}` / `{{DELIVERABLE_FOCUS}}` / `{{VOICE_EXTRAS}}` | Interview-derived profile/persona content | — |
 | `{{HOME_ADDRESS}}` | Operator's travel origin (meeting-prep "leave by") — lives only in the instantiated script, never in docs | — |
+
+Templates without placeholders (install as-is):
+- `bin/python.template` → `~/.local/bin/python`, `bin/scrapling.template` → `~/.local/bin/scrapling` (Hermes v0.22+; both find Hermes's own Python through `~/.local/bin/hermes`, so they survive every update).
+- `plugins/agent-deps/` → `~/.hermes/plugins/agent-deps/` (Hermes v0.22+; `{{OPERATOR_NAME}}` in its `plugin.yaml`) — the Python packages our scripts and skills need, declared so the package manager keeps them across updates.
+- `plugins/social-readonly/` → `~/.hermes/plugins/social-readonly/` (only when real-profile browsing is used).
 
 Rules the installer must keep:
 1. Instantiate → smoke-test by hand → wire → verify → only then schedule.

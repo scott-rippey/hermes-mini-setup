@@ -47,7 +47,7 @@ def _agent_model_name():
 
 
 HOME = Path.home()
-PY = str(HOME / ".hermes/hermes-agent/venv/bin/python")
+PY = str(HOME / ".local/bin/python")  # works on every version: v0.22 wrapper, older venv symlink
 GAPI = str(HOME / ".hermes/skills/productivity/google-workspace/scripts/google_api.py")
 LOGS = HOME / ".hermes" / "logs"
 BACKUP_DIR = HOME / "backups"

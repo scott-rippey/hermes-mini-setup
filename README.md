@@ -50,8 +50,8 @@ cd hermes-mini-setup
 # open Claude Code here, then say: "let's begin"
 ```
 
-`CLAUDE.md` is the installer's brain — phases, decision points, verification gates, and every gotcha we hit so you don't have to. The 14 deep-dive feature docs in [`docs/`](docs/) (architecture → security → operations) are what the installer builds from, and solid reading on their own.
+`CLAUDE.md` is the installer's brain — phases, decision points, verification gates, and every gotcha we hit so you don't have to. The deep-dive feature docs in [`docs/`](docs/) (architecture → security → operations) are what the installer builds from, and solid reading on their own. **Already running an older install?** [`docs/upgrading-to-v0.22.md`](docs/upgrading-to-v0.22.md) tells the story of the v0.22 jump — what changed, what we did and why — and walks your Claude Code through it.
 
 ## Provenance
 
-This is the sanitized, reproducible walkthrough of a real production system (built June–July 2026 on Hermes Agent v0.17.0, running on v0.21.5 today). Every feature here runs daily on the original box; every gotcha in the appendix was hit for real. Nothing customer- or operator-specific was ever committed to this repo — the personalization phase generates *your* specifics locally.
+This is the sanitized, reproducible walkthrough of a real production system (built June–July 2026 on Hermes Agent v0.17.0, running on v0.22.5 today). Every feature here runs daily on the original box; every gotcha in the appendix was hit for real. Nothing customer- or operator-specific was ever committed to this repo — the personalization phase generates *your* specifics locally.

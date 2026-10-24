@@ -107,7 +107,7 @@ stay on disk, not in the KB.
 1. Read-only on Instagram: no follows, likes, comments, saves, DMs, no profile
    or settings pages. The research account exists only to view.
    Enforced in software too: the `social-readonly` plugin vetoes browser_click /
-   browser_type / browser_press / JS eval on social hosts (fail-closed) — a block
+   browser_type / browser_press / browser_dialog / browser_vault / JS eval on social hosts, and browser_cdp / browser_exec everywhere (fail-closed) — a block
    there is the guard working, not a bug to route around.
 2. Never log in, never enter a code, never bypass a challenge. Stop and tell the operator.
 3. No reel video — caption text only.

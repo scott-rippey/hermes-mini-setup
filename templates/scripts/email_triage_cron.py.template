@@ -32,7 +32,7 @@ from email.utils import parseaddr
 from pathlib import Path
 
 HOME = Path.home()
-PY = str(HOME / ".hermes/hermes-agent/venv/bin/python")
+PY = str(HOME / ".local/bin/python")  # works on every version: v0.22 wrapper, older venv symlink
 HERMES = str(HOME / ".local/bin/hermes")
 # Tool-less headless call: this prompt carries third-party content (email), so the toolset is
 # restricted in the CLI to a zero-tool set — enforcement, not a prose "do not use tools".

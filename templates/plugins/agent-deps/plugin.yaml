@@ -1,0 +1,4 @@
+name: agent-deps
+version: "1.0"
+description: Declares the Python packages this install's own scripts and skills need (document trio, scrapling) so Hermes's package manager carries them into every dependency generation. Registers nothing.
+author: "{{OPERATOR_NAME}}"

@@ -1,0 +1,4 @@
+#!/bin/sh
+# TEMPLATE — no placeholders; install to ~/.local/bin/scrapling (chmod +x). Hermes v0.22+ only.
+# The scrapling CLI in the Hermes environment (scrapling itself is declared by the agent-deps plugin).
+exec "$HOME/.local/bin/python" -c 'import sys; from scrapling.cli import main; sys.argv[0] = "scrapling"; sys.exit(main())' "$@"

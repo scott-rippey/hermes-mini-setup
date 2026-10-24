@@ -33,7 +33,7 @@ Enable/disable = the **`skills.disabled` list in `config.yaml`** + a gateway res
 | pdf | bundled (Anthropic, since platform v0.19) | Create/merge/split/**fill forms**/secure PDFs (pypdf + pdfplumber + pdf2image; needs poppler on PATH) |
 | xlsx | bundled (Anthropic, since platform v0.19) | Create/read/edit Excel/CSV — the build's only spreadsheet capability (openpyxl + a formula-recalc script) |
 
-**Doc-trio deps are NOT bundled** — install into the platform venv (`pip install --only-binary :all: openpyxl pdf2image pdfplumber pypdf`), then **`pip check`**: if it flags a Pillow conflict, re-pin to the platform's required version. `brew install poppler` if `pdftoppm` is missing. Smoke-test each before relying on them.
+**Doc-trio and scrapling packages are NOT bundled** — declare them in the `agent-deps` plugin ([templates/plugins/agent-deps/](../templates/plugins/agent-deps/)) and `hermes plugins enable agent-deps`; never `pip install` into Hermes's environment, which v0.22 rebuilds on every update. `brew install poppler` if `pdftoppm` is missing. Smoke-test each before relying on them.
 
 ## The patch ledger (keep one; this is yours pre-filled)
 

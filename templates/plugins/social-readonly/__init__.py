@@ -17,7 +17,10 @@ READ_ONLY_HOSTS = (
     "instagram.com", "threads.net", "facebook.com", "tiktok.com",
     "x.com", "twitter.com", "linkedin.com", "youtube.com", "reddit.com",
 )
-ACTION_TOOLS = ("browser_click", "browser_type", "browser_press")
+ACTION_TOOLS = ("browser_click", "browser_type", "browser_press", "browser_dialog", "browser_vault")
+# Raw CDP and script execution can act on any open tab regardless of the current page, so a host
+# check cannot contain them: refused everywhere (our IG capture talks to Chrome directly, not via these).
+ALWAYS_BLOCKED_TOOLS = ("browser_cdp", "browser_exec")
 # Account settings, login, DMs, the composer — never a research destination.
 BLOCKED_PATH_PREFIXES = ("/accounts/", "/direct/", "/create/")
 
@@ -50,6 +53,10 @@ def _block(tool_name: str, host: str) -> dict:
 
 def pre_tool_call(tool_name: str = "", args: Optional[dict] = None, task_id: str = "", **_: Any):
     args = args or {}
+    if tool_name in ALWAYS_BLOCKED_TOOLS:
+        return {"action": "block", "message": (
+            f"Blocked by the social-readonly guard: {tool_name} is disabled on this box (raw browser control "
+            "can act on social-media tabs). Use browser_navigate/browser_snapshot/browser_scroll instead.")}
     if tool_name == "browser_navigate":
         url = str(args.get("url") or "")
         host = _social_host(url)

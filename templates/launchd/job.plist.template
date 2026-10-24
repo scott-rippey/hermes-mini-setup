@@ -42,7 +42,7 @@
   <string>ai.hermes.{{JOB}}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{{HERMES_VENV_PYTHON}}</string>
+    <string>{{HOME}}/.local/bin/python</string>
     <string>{{HOME}}/.hermes/scripts/{{SCRIPT}}.py</string>
   </array>
   <key>EnvironmentVariables</key>

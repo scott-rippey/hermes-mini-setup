@@ -1,0 +1,20 @@
+# TEMPLATE — install to ~/.hermes/plugins/agent-deps/ (Hermes v0.22+), then `hermes plugins enable agent-deps`.
+# Hermes v0.22 rebuilds its Python environment on every update; anything pip-installed by hand is
+# dropped. Packages declared here are resolved with Hermes's own lock and carried forward. Add a line
+# here (never `pip install`) whenever a script or skill needs a new package.
+[project]
+name = "agent-deps"
+version = "1.0.0"
+description = "Python dependencies for this install's own scripts and skills (no code)."
+requires-python = ">=3.14"
+dependencies = [
+  "openpyxl>=3.1.5",      # xlsx skill
+  "pypdf>=6.14",          # pdf skill
+  "pdfplumber>=0.11.10",  # pdf skill
+  "pypdfium2>=5.12",      # pdf skill page images
+  "pdf2image>=1.17",      # pdf skill page images (poppler fallback)
+  "python-docx>=1.1",     # docx skill
+  # Hermes's lock resolves for every platform it supports; scrapling's browser driver has no
+  # Android wheels, so the marker keeps the resolver from refusing the whole set.
+  "scrapling[all]>=0.5,<0.6; sys_platform == 'darwin'",
+]

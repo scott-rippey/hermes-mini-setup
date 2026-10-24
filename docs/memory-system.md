@@ -29,9 +29,9 @@ Not memory: the **Postgres KB** ([knowledge-base.md](knowledge-base.md)). Never 
 ## Rules of the road
 
 - **Never hand-edit `memories/*.md` into document form.** Let the agent save facts (`write_approval: false` is fine — KB writes are the gated ones, not profile facts).
-- **Standing behavior → SOUL.md** + gateway restart. SOUL is snapshotted per session: live conversations keep the old version; the **daily 4am session reset** guarantees changes land by morning (`/new` forces it immediately).
+- **Standing behavior → SOUL.md** + gateway restart. SOUL is snapshotted per session: live conversations keep the old version until `/new` in that channel (no timed reset since v0.22).
 - **Supporting facts → memory, freely.** That's the split: rules on the backend, facts in memory.
 
 ## Knobs (reference values, deliberate)
 
-`memory_char_limit: 5000` · `user_char_limit: 5000` (raised) · `write_approval: false` · session reset: 4am / 24h idle (a feature — keep it).
+`memory_char_limit: 5000` · `user_char_limit: 5000` (raised) · `write_approval: false` · sessions last until `/new` (v0.22 retired timed resets).
