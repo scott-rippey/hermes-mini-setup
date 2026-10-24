@@ -61,8 +61,19 @@ def log(msg):
 
 # ----------------------------------------------------------------------------- profile clone
 
+# Chrome processes Hermes itself owns: the agent's real-profile browsing session, agent-browser's
+# own Chromium, and this script's capture clone. Only the operator's everyday Chrome (which locks
+# the login databases rebuild_profile copies) should block a capture.
+_OWN_CHROME_MARKERS = ("/.hermes/browser-profile/", "/agent-browser-chrome", "Google Chrome for Testing",
+                       "/{{AGENT_SLUG}}-outputs/ig-research/.chrome-profile")
+
+
 def chrome_running():
-    return subprocess.run(["pgrep", "-f", "Google Chrome"], capture_output=True).returncode == 0
+    out = subprocess.run(["ps", "-axww", "-o", "command="], capture_output=True, text=True).stdout
+    # Only the main browser process holds the profile's files; helpers (renderers, crashpad) don't.
+    main = "Google Chrome.app/Contents/MacOS/Google Chrome"
+    return any(main in line and not any(m in line for m in _OWN_CHROME_MARKERS)
+               for line in out.splitlines())
 
 
 def clone_has_session():
