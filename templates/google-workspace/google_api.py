@@ -493,6 +493,8 @@ def gmail_draft_create(args):
     message = MIMEText(body_text, "html" if args.html else "plain")
     message["To"] = args.to
     message["Subject"] = args.subject
+    if getattr(args, "cc", ""):
+        message["Cc"] = args.cc
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
     msg_body = {"raw": raw}
     if args.thread_id:
@@ -521,6 +523,8 @@ def gmail_draft_update(args):
     message = MIMEText(body_text, "html" if args.html else "plain")
     message["To"] = args.to
     message["Subject"] = args.subject
+    if getattr(args, "cc", ""):
+        message["Cc"] = args.cc
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
     msg_body = {"raw": raw}
     if args.thread_id:
@@ -557,6 +561,8 @@ def gmail_reply(args):
         message = MIMEText(args.body + _agent_signature_for(headers.get("from", "")))
         message["To"] = headers.get("from", "")
         message["Subject"] = subject
+        if getattr(args, "cc", ""):
+            message["Cc"] = args.cc
         if args.from_header:
             message["From"] = args.from_header
         if headers.get("message-id"):
@@ -587,6 +593,8 @@ def gmail_reply(args):
     message = MIMEText(args.body + _agent_signature_for(headers.get("from", "")))
     message["To"] = headers.get("from", "")
     message["Subject"] = subject
+    if getattr(args, "cc", ""):
+        message["Cc"] = args.cc
     if args.from_header:
         message["From"] = args.from_header
     if headers.get("message-id"):
@@ -1323,6 +1331,7 @@ def main():
     p.add_argument("--body", required=True)
     p.add_argument("--html", action="store_true", help="Draft body as HTML")
     p.add_argument("--thread-id", default="", help="Thread ID to attach the draft to (reply drafts)")
+    p.add_argument("--cc", default="", help="Comma-separated Cc addresses for the draft")
     p.add_argument("--no-signature", action="store_true", help="Omit the operator signature (default: appended)")
     p.set_defaults(func=gmail_draft_create)
 
@@ -1333,12 +1342,14 @@ def main():
     p.add_argument("--body", required=True, help="FULL revised body (Gmail replaces the whole message)")
     p.add_argument("--html", action="store_true", help="Draft body as HTML")
     p.add_argument("--thread-id", default="", help="Thread ID (keep the same as the original draft)")
+    p.add_argument("--cc", default="", help="Comma-separated Cc addresses (pass the full list again: the update replaces the whole message)")
     p.add_argument("--no-signature", action="store_true", help="Omit the operator signature (default: appended)")
     p.set_defaults(func=gmail_draft_update)
 
     p = gmail_sub.add_parser("reply")
     p.add_argument("message_id", help="Message ID to reply to")
     p.add_argument("--body", required=True)
+    p.add_argument("--cc", default="", help="Comma-separated Cc addresses (the operator is still auto-CC'd on outbound mail)")
     p.add_argument("--from", dest="from_header", default="", help="Custom From header (e.g. '\"Agent Name\" <user@example.com>')")
     p.set_defaults(func=gmail_reply)
 
