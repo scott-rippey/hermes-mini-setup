@@ -73,6 +73,9 @@ For each item {{OPERATOR_FIRST_NAME}} asks to draft:
    ```
    Then report the returned `draft_id` as confirmation — never claim the draft
    exists without the tool's returned id (write-verification rule).
+   Recipients follow the ask: a plain reply goes to the sender only (the default);
+   "reply all" adds `--reply-all` (everyone else on the thread's latest message moves to Cc);
+   "add X to the CC" adds `--cc "x@…"` (combines with either).
 5. {{OPERATOR_FIRST_NAME}} reviews it in Gmail and sends it himself.
 
 ## Hard rules

@@ -34,6 +34,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
+from email.utils import formataddr, getaddresses
 from pathlib import Path
 
 # Ensure sibling modules (_hermes_home) are importable when run standalone.
@@ -161,6 +162,35 @@ def _headers_dict(msg: dict) -> dict[str, str]:
         for h in msg.get("payload", {}).get("headers", [])
         if h.get("name")
     }
+
+
+def _reply_all_cc(service, headers: dict, to_addr: str, extra_cc: str = "") -> str:
+    """Reply-all Cc list: the original message's To + Cc, minus this account's own
+    address and anyone already in To, merged with any explicit --cc. Deduplicated."""
+    me = (service.users().getProfile(userId="me").execute().get("emailAddress") or "").lower()
+    skip = {me} | {a.lower() for _, a in getaddresses([to_addr or ""])}
+    out, seen = [], set()
+    for name, addr in getaddresses([headers.get("to", ""), headers.get("cc", ""), extra_cc or ""]):
+        a = addr.lower()
+        if not a or a in skip or a in seen:
+            continue
+        seen.add(a)
+        out.append(formataddr((name, addr)) if name else addr)
+    return ", ".join(out)
+
+
+def _thread_reply_all_cc(service, thread_id: str, to_addr: str, extra_cc: str = "") -> str:
+    """Reply-all for a reply DRAFT: use the thread's latest message not sent by this account."""
+    if not thread_id:
+        raise SystemExit("--reply-all on a draft needs --thread-id (the thread being replied to)")
+    me = (service.users().getProfile(userId="me").execute().get("emailAddress") or "").lower()
+    thread = service.users().threads().get(
+        userId="me", id=thread_id, format="metadata", metadataHeaders=["From", "To", "Cc"]).execute()
+    msgs = thread.get("messages", [])
+    theirs = [m for m in msgs if me not in _headers_dict(m).get("from", "").lower()]
+    if not (theirs or msgs):
+        raise SystemExit(f"thread {thread_id} has no messages")
+    return _reply_all_cc(service, _headers_dict((theirs or msgs)[-1]), to_addr, extra_cc)
 
 
 def _extract_message_body(msg: dict) -> str:
@@ -493,13 +523,15 @@ def gmail_draft_create(args):
     message = MIMEText(body_text, "html" if args.html else "plain")
     message["To"] = args.to
     message["Subject"] = args.subject
-    if getattr(args, "cc", ""):
-        message["Cc"] = args.cc
+    service = build_service("gmail", "v1")
+    cc = (_thread_reply_all_cc(service, args.thread_id, args.to, getattr(args, "cc", ""))
+          if getattr(args, "reply_all", False) else getattr(args, "cc", ""))
+    if cc:
+        message["Cc"] = cc
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
     msg_body = {"raw": raw}
     if args.thread_id:
         msg_body["threadId"] = args.thread_id
-    service = build_service("gmail", "v1")
     result = service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
     print(json.dumps({
         "status": "draft_created",
@@ -523,13 +555,15 @@ def gmail_draft_update(args):
     message = MIMEText(body_text, "html" if args.html else "plain")
     message["To"] = args.to
     message["Subject"] = args.subject
-    if getattr(args, "cc", ""):
-        message["Cc"] = args.cc
+    service = build_service("gmail", "v1")
+    cc = (_thread_reply_all_cc(service, args.thread_id, args.to, getattr(args, "cc", ""))
+          if getattr(args, "reply_all", False) else getattr(args, "cc", ""))
+    if cc:
+        message["Cc"] = cc
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
     msg_body = {"raw": raw}
     if args.thread_id:
         msg_body["threadId"] = args.thread_id
-    service = build_service("gmail", "v1")
     result = service.users().drafts().update(
         userId="me", id=args.draft_id, body={"message": msg_body}
     ).execute()
@@ -542,6 +576,8 @@ def gmail_draft_update(args):
 
 
 def gmail_reply(args):
+    if _gws_binary() and getattr(args, "reply_all", False):
+        raise SystemExit("--reply-all needs the Python client path (no gws binary)")
     if _gws_binary():
         original = _run_gws(
             ["gmail", "users", "messages", "get"],
@@ -582,7 +618,7 @@ def gmail_reply(args):
     service = build_service("gmail", "v1")
     original = service.users().messages().get(
         userId="me", id=args.message_id, format="metadata",
-        metadataHeaders=["From", "Subject", "Message-ID"],
+        metadataHeaders=["From", "To", "Cc", "Subject", "Message-ID"],
     ).execute()
     headers = _headers_dict(original)
 
@@ -593,8 +629,10 @@ def gmail_reply(args):
     message = MIMEText(args.body + _agent_signature_for(headers.get("from", "")))
     message["To"] = headers.get("from", "")
     message["Subject"] = subject
-    if getattr(args, "cc", ""):
-        message["Cc"] = args.cc
+    cc = (_reply_all_cc(service, headers, message["To"], getattr(args, "cc", ""))
+          if getattr(args, "reply_all", False) else getattr(args, "cc", ""))
+    if cc:
+        message["Cc"] = cc
     if args.from_header:
         message["From"] = args.from_header
     if headers.get("message-id"):
@@ -1332,6 +1370,7 @@ def main():
     p.add_argument("--html", action="store_true", help="Draft body as HTML")
     p.add_argument("--thread-id", default="", help="Thread ID to attach the draft to (reply drafts)")
     p.add_argument("--cc", default="", help="Comma-separated Cc addresses for the draft")
+    p.add_argument("--reply-all", action="store_true", help="Reply-all draft: also Cc everyone on the thread's latest message (needs --thread-id)")
     p.add_argument("--no-signature", action="store_true", help="Omit the operator signature (default: appended)")
     p.set_defaults(func=gmail_draft_create)
 
@@ -1343,6 +1382,7 @@ def main():
     p.add_argument("--html", action="store_true", help="Draft body as HTML")
     p.add_argument("--thread-id", default="", help="Thread ID (keep the same as the original draft)")
     p.add_argument("--cc", default="", help="Comma-separated Cc addresses (pass the full list again: the update replaces the whole message)")
+    p.add_argument("--reply-all", action="store_true", help="Reply-all draft: also Cc everyone on the thread's latest message (needs --thread-id)")
     p.add_argument("--no-signature", action="store_true", help="Omit the operator signature (default: appended)")
     p.set_defaults(func=gmail_draft_update)
 
@@ -1350,6 +1390,7 @@ def main():
     p.add_argument("message_id", help="Message ID to reply to")
     p.add_argument("--body", required=True)
     p.add_argument("--cc", default="", help="Comma-separated Cc addresses (the operator is still auto-CC'd on outbound mail)")
+    p.add_argument("--reply-all", action="store_true", help="Also Cc everyone else on the original message (default: reply to the sender only)")
     p.add_argument("--from", dest="from_header", default="", help="Custom From header (e.g. '\"Agent Name\" <user@example.com>')")
     p.set_defaults(func=gmail_reply)
 
