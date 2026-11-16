@@ -56,6 +56,14 @@ detached (`nohup … > <show>/capture.log 2>&1 &`), tell {{OPERATOR_FIRST_NAME}}
 `--limit 1` first on a new show to eyeball one transcript; add mishearings to
 `glossary.json` and `reglossary <show>` re-applies it to every transcript.
 
+### Selected episodes only
+
+When {{OPERATOR_FIRST_NAME}} approves only some episodes, save a per-show `selection.json` (exact feed GUIDs, dates, titles, why each was chosen) plus a scoped `brief.md`. Never use a full-window `run` or `pod_queue.sh` for a selection: run `pod_capture.py run` once per episode with that episode's date as both `--since` and `--until`, after checking the date matches only the selected GUID in the feed — if two episodes share a date, stop and report rather than capture extras. GUIDs are the identifier (titles get whitespace-normalized).
+
+`run` transcribes **every** unfinished ledger row, not just the requested window, so before resuming confirm the ledger holds only the selected GUIDs. After capture, require exactly the selected GUID set, every row `done`, and real transcript files before distilling; require one notes file per selected episode before the final synthesis.
+
+If new work is approved while a capture is still running, never interrupt it — queue the new job to start after it finishes, verify the finished ledger first, and report only stages that actually completed.
+
 ### 2. Verify
 
 `status` shows counts and any `failed` rows (with the error). Open one transcript: names
