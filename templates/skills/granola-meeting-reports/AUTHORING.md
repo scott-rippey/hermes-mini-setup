@@ -118,12 +118,12 @@ This feeds a knowledge base, so nothing false is stated as fact.
 
 ## 8. Glossary normalization (how)
 
-Keep a master glossary in this file (seed below - it accretes with every run). Mechanics:
+The seed master glossary below is fixed; confirmed terms accrete in `~/.hermes/data/meeting-glossary.md` (written by `glossary_add.py`, read on every run). Mechanics:
 
 - Columns: "Possibly heard as" -> "Correct term" -> Notes. The left column lists representative mishears, NOT exact strings; also fix close phonetic/spelling variants of the same term.
 - Mark uncertainty with `[best guess]` or `[unverified]`; never "correct" a term into something the audio does not support.
 - Each run: normalize any listed term, add new mistranscriptions you resolve, and optionally list the applied fixes in the note's own Glossary section.
-- Terms still flagged `[best guess]`/`[unverified]` after authoring get surfaced to {{OPERATOR_FIRST_NAME}} in Slack after filing (SKILL.md, "Glossary escalation"); confirmations are applied via an idempotent re-file AND added to the master glossary below - each term is asked at most once, ever.
+- Terms still flagged `[best guess]`/`[unverified]` after authoring get surfaced to {{OPERATOR_FIRST_NAME}} in Slack after filing (SKILL.md, "Glossary escalation"); confirmations are applied via an idempotent re-file AND saved with `glossary_add.py` to the data glossary - each term is asked at most once, ever.
 - Counterpart names never need glossary entries (they come from the title). The People part of the glossary is for third parties only.
 
 ---
@@ -145,7 +145,7 @@ If `get_meeting_transcript` is too large to read in context, do not guess from t
 
 ---
 
-## Master glossary (seed - accretes with every run)
+## Master glossary (seed - fixed; confirmed terms live in ~/.hermes/data/meeting-glossary.md)
 
 Representative mishears -> correct term. The left column is not exhaustive; also fix close variants. Flags: `[best guess]` = likely but unconfirmed; `[unverified]` = could not confirm. When unsure, keep the flag rather than asserting.
 

@@ -21,7 +21,7 @@ Turn a Granola meeting into two artifacts and route them:
 
 Trigger when {{OPERATOR_FIRST_NAME}} says "process my latest Granola meeting", "redo the meeting report for X", or when the `ai.hermes.meeting-reports` cron runs this headlessly (nightly 10pm).
 
-**Authoring spec = the bundled `AUTHORING.md`** — the single source of truth for the content template, voice, accuracy protocol, and glossary mechanics. Follow it for CONTENT; rendering is `render.js` → Markdown + HTML.
+**Authoring spec = the bundled `AUTHORING.md`** — the single source of truth for the content template, voice, accuracy protocol, and glossary mechanics. Follow it for CONTENT; rendering is `render.js` → Markdown + HTML. Also read `~/.hermes/data/meeting-glossary.md` when normalizing terms — {{OPERATOR_FIRST_NAME}}'s confirmed names, kept as data outside the skill so confirmations stick without a skill edit.
 
 ## Tools and helpers
 - **Granola:** `mcp_granola_list_meetings`, `mcp_granola_get_meetings` (AI summary), `mcp_granola_get_meeting_transcript` (full transcript).
@@ -70,7 +70,9 @@ After the run has filed (or escalated) its meetings, collect every flagged term 
 
 Never block or delay filing on an unanswered glossary question — flags stay in the filed report until answered. When {{OPERATOR_FIRST_NAME}} replies (typically the next morning, in a fresh session — the Slack thread carries all needed context):
 1. Apply the corrections to the content JSON, re-render, re-file via `add_meeting` (same `meeting_id` — idempotent upsert; the corrected report replaces the KB doc).
-2. Add each confirmed term to the master glossary (AUTHORING.md, "Master glossary" table) so it is never asked again. "All correct" confirmations go in too — a confirmed `[best guess]` becomes a plain glossary row.
+2. Save each confirmed term so it is never asked again — {{OPERATOR_FIRST_NAME}}'s reply IS the approval, so record it directly with the script (never by editing this skill's files, which would stage it for a second approval):
+   `~/.local/bin/python ~/.hermes/scripts/glossary_add.py add "<possibly heard as>" "<correct term>" "<short note>"`
+   One call per term; "all correct" confirmations go in too (a confirmed `[best guess]` becomes a plain row).
 3. Do NOT re-append to `state/pending-brief.json` (the original already rode a brief); confirm the correction in the chat thread instead.
 
 ## Hand-off to the morning brief

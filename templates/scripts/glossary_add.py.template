@@ -1,0 +1,78 @@
+#!/usr/bin/env python
+"""Meeting-report glossary: {{OPERATOR_FIRST_NAME}}'s confirmed terms, stored as DATA outside the skill.
+
+{{OPERATOR_FIRST_NAME}}'s answer to a glossary question IS the approval, so this writes straight to
+~/.hermes/data/meeting-glossary.md (a Markdown table the meeting-reports skill reads on
+every run) — no skill edit, nothing staged for approval.
+
+  glossary_add.py add "<possibly heard as>" "<correct term>" ["<note>"]   # add, or update the row with the same heard-as
+  glossary_add.py list
+"""
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+PATH = Path.home() / ".hermes/data/meeting-glossary.md"
+HEADER = (
+    "# Confirmed meeting terms\n\n"
+    "{{OPERATOR_FIRST_NAME}}'s confirmed corrections for meeting reports. Extends the master glossary in the skill's "
+    "AUTHORING.md master glossary; use these names without uncertainty flags. Written by "
+    "`~/.hermes/scripts/glossary_add.py` — edit by hand or with that script, never through a skill edit.\n\n"
+    "| Possibly heard as | Correct term | Notes |\n|---|---|---|\n"
+)
+
+
+def _cell(s: str) -> str:
+    return " ".join(str(s).replace("|", "/").split())
+
+
+def load() -> list[list[str]]:
+    if not PATH.exists():
+        return []
+    rows = []
+    for line in PATH.read_text().splitlines():
+        if line.startswith("|") and not line.startswith("|---") and "Possibly heard as" not in line:
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) >= 2:
+                rows.append((cells + [""])[:3])
+    return rows
+
+
+def save(rows: list[list[str]]) -> None:
+    PATH.parent.mkdir(parents=True, exist_ok=True)
+    body = HEADER + "".join(f"| {h} | {c} | {n} |\n" for h, c, n in rows)
+    fd, tmp = tempfile.mkstemp(dir=PATH.parent, prefix=".glossary-")
+    with os.fdopen(fd, "w") as f:
+        f.write(body)
+    os.replace(tmp, PATH)
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) >= 3 and argv[0] == "add":
+        heard, correct = _cell(argv[1]), _cell(argv[2])
+        note = _cell(argv[3]) if len(argv) > 3 else ""
+        if not heard or not correct:
+            print("error: heard-as and correct term are both required", file=sys.stderr)
+            return 2
+        rows = load()
+        for r in rows:
+            if r[0].lower() == heard.lower():
+                r[1], r[2] = correct, note or r[2]
+                save(rows)
+                print(f"updated: {heard} -> {correct}")
+                return 0
+        rows.append([heard, correct, note])
+        save(rows)
+        print(f"added: {heard} -> {correct}  ({len(rows)} terms)")
+        return 0
+    if argv[:1] == ["list"]:
+        for h, c, n in load():
+            print(f"{h} -> {c}" + (f"  ({n})" if n else ""))
+        return 0
+    print(__doc__.strip(), file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
