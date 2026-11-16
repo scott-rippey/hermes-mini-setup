@@ -54,6 +54,7 @@ KEYCHAIN_SERVICE = "{{AGENT_SLUG}}-backup-key"
 KEYCHAIN_ACCOUNT = "{{AGENT_SLUG}}"
 DRIVE_FOLDER_NAME = "{{AGENT_NAME}} Backups"
 RETAIN_DRIVE_DAYS = 14
+RETAIN_DRIVE_MIN = 7  # always keep the newest N, whatever their age (an outage must not wipe history)
 RETAIN_LOCAL = 1
 
 # The two live SQLite DBs to snapshot consistently (WAL-active -> never file-copy).
@@ -254,11 +255,14 @@ def prune_drive(folder_id):
     cutoff = datetime.datetime.now() - datetime.timedelta(days=RETAIN_DRIVE_DAYS)
     q = f"'{folder_id}' in parents and trashed = false"
     files = gapi(["drive", "search", q, "--raw-query", "--max", "100"]) or []
+    ours = []
     for f in files:
         m = NAME_RE.match(f.get("name", ""))
         if not m:
             continue  # never touch anything not matching our exact backup name
-        when = datetime.datetime.strptime(m.group(1), "%Y%m%d-%H%M%S")
+        ours.append((datetime.datetime.strptime(m.group(1), "%Y%m%d-%H%M%S"), f))
+    ours.sort(key=lambda x: x[0], reverse=True)
+    for when, f in ours[RETAIN_DRIVE_MIN:]:
         if when < cutoff:
             log(f"  prune Drive: {f['name']}")
             gapi(["drive", "delete", f["id"], "--permanent"])

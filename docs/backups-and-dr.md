@@ -25,7 +25,7 @@
 
 **Encryption:** gpg AES-256; passphrase from the login keychain, fed via `--passphrase-fd` — never logged, never in files. The Drive copy is opaque even though it contains live credentials.
 
-**Retention:** 14 days in Drive (the prune matches only the exact backup filename pattern), 1 local copy.
+**Retention:** 14 days in Drive, but the newest 7 bundles are always kept whatever their age (so an outage longer than two weeks can't prune the whole history; the prune matches only the exact backup filename pattern), 1 local copy.
 
 ## Layer 2 — docs push (`templates/scripts/git_backup.py.template`)
 
