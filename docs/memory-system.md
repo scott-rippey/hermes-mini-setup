@@ -28,10 +28,10 @@ Not memory: the **Postgres KB** ([knowledge-base.md](knowledge-base.md)). Never 
 
 ## Rules of the road
 
-- **Never hand-edit `memories/*.md` into document form.** Let the agent save facts (`write_approval: false` is fine — KB writes are the gated ones, not profile facts).
+- **Never hand-edit `memories/*.md` into document form.** Let the agent save facts — after asking: the SOUL template's "ask before you remember" rule has it ask in one line and save only on the operator's yes in that conversation (that yes is the approval, so `write_approval` stays `false` and there's no second approval card). The reference build also turns the automatic post-turn background review off (`auxiliary.background_review.enabled: false`) so nothing is saved silently; recall of past chats is unaffected.
 - **Standing behavior → SOUL.md** + gateway restart. SOUL is snapshotted per session: live conversations keep the old version until `hermes sessions refresh-prompts` (v0.23+, all live sessions, history kept) or `/new` in that channel.
 - **Supporting facts → memory, freely.** That's the split: rules on the backend, facts in memory.
 
 ## Knobs (reference values, deliberate)
 
-`memory_char_limit: 5000` · `user_char_limit: 5000` (raised) · `write_approval: false` · sessions last until `/new` (v0.22 retired timed resets).
+`memory_char_limit: 5000` · `user_char_limit: 5000` (raised) · `write_approval: false` · `auxiliary.background_review.enabled: false` · sessions last until `/new` (v0.22 retired timed resets).
