@@ -48,7 +48,7 @@ def _block(tool_name: str, host: str) -> dict:
     return {"action": "block", "message": (
         f"Blocked by the social-readonly guard: {tool_name} on {host}. Social-media sites are "
         "READ-ONLY for research — never like, follow, comment, post, DM, log in, or open account "
-        "pages. Use browser_snapshot, browser_scroll, browser_get_images or vision instead.")}
+        "pages. Instagram research runs through the instagram-coach-research capture script.")}
 
 
 def pre_tool_call(tool_name: str = "", args: Optional[dict] = None, task_id: str = "", **_: Any):
@@ -56,7 +56,8 @@ def pre_tool_call(tool_name: str = "", args: Optional[dict] = None, task_id: str
     if tool_name in ALWAYS_BLOCKED_TOOLS:
         return {"action": "block", "message": (
             f"Blocked by the social-readonly guard: {tool_name} is disabled on this box (raw browser control "
-            "can act on social-media tabs). Use browser_navigate/browser_snapshot/browser_scroll instead.")}
+            "can act on social-media tabs). There is no agent browser on this box; Instagram research runs "
+            "through the instagram-coach-research capture script.")}
     if tool_name == "browser_navigate":
         url = str(args.get("url") or "")
         host = _social_host(url)

@@ -19,4 +19,5 @@ The installer (root `CLAUDE.md`) references these per phase; the operator keeps 
 | [proposal-esign.md](proposal-esign.md) | Proposals & contracts via SignWell: send-card gate, contract mode, the collection poller | 10b |
 | [operations.md](operations.md) | The operator's runbook: rhythm, ceremonies, troubleshooting | 11 → forever |
 | [upgrading-to-v0.22.md](upgrading-to-v0.22.md) | The v0.21 → v0.22 jump as a story (what changed, what we did, why) plus the step-by-step for an existing install | existing installs |
+| [upgrading-to-v0.23.md](upgrading-to-v0.23.md) | The v0.22.5 → v0.23.1 jump: the old browser removed (and how to keep the agent browser-less), script-only Instagram capture, gateway-run one-shots, `microsoft-office`, `refresh-prompts` |
 | [hardening-prompt-2026-10-20.md](hardening-prompt-2026-10-20.md) | Paste-in prompt for an existing install: makes the headless email/transcript jobs tool-less (version gate, skip-if-absent, verification) | existing installs |

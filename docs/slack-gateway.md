@@ -32,7 +32,7 @@ All three are **free-response channels** (`slack.free_response_channels` = their
 
 - The one always-on service (KeepAlive). Manage with `hermes gateway start|stop|restart|status`.
 - **Any config.yaml or SOUL.md change → restart.** The Slack "Gateway shutting down" message is a restart, not a crash — it drains in-flight runs and self-heals in seconds.
-- **SOUL is snapshotted per session:** live conversations keep the old SOUL until `/new` (or `/reset`) in that channel — v0.22 retired timed resets, so `/new` after a SOUL change is the habit.
+- **SOUL is snapshotted per session:** live conversations keep the old SOUL until `hermes sessions refresh-prompts` (v0.23+: every live session picks it up on its next turn, history kept) or `/new` / `/reset` in that channel. Sessions never reset on a timer.
 - Logs live in `~/.hermes/logs/`; the ops digest checks the process daily (a dead gateway is a red row, not a silent absence).
 
 ## Boundaries recap

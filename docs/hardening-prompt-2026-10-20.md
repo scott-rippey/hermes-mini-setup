@@ -22,6 +22,7 @@ Work turn-based: do one numbered step, show the result, then continue. Step 0 is
    hermes -z "Reply with ONLY the exact names of every tool you currently have available, comma separated. Do not call any tool."
    ```
    Expected: the first answers `NONE`, the second lists dozens of tools. If `context_engine` is unknown on this version, list the toolset catalog with `cd ~/.hermes/hermes-agent && ~/.local/bin/python -c "import toolsets; T=toolsets.TOOLSETS; print([k for k in T if not T[k].get('tools') and not T[k].get('includes')])"` and use any zero-tool entry instead, re-running the first command to confirm `NONE`. Stop and report if no zero-tool toolset exists.
+   On v0.23 or newer the run executes inside the gateway, so the model's answer is not proof on its own: also run `sqlite3 ~/.hermes/state.db "select p.prompt from sessions s join system_prompts p on p.hash=s.tool_names order by s.started_at desc limit 1"` right after the first command — it must show `"tools": []`.
 
 2. **Find every headless call that ingests outside content.** `grep -rn '"-z", prompt' ~/.hermes/scripts ~/.hermes/skills` and list what each script feeds the model. Expected hits: `email_triage_cron.py`, `agent_inbox.py` (or the install's agent-slug name), `morning_brief.py`, `meeting_prep.py`, telephony `call_report.py`, and if present `pod_distill.py` / `ig_synthesize.py`. Leave alone the ones that read only our own data (`system_changes.py`, `kb_maintenance.py`).
 

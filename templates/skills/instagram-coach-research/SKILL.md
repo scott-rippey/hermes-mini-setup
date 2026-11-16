@@ -14,11 +14,12 @@ metadata:
 
 Builds a grounded picture of how a coach actually programs — from their public
 Instagram posts — so the operator can see where their own methodology aligns and differs.
-Everything is captured through the **built-in browser tools** on the agent's
-**real-profile snapshot** (`browser.use_real_profile: true`, pinned to the Chrome
-profile signed into the dedicated research Instagram account that follows the
-target coaches). Instagram's public web and `web_extract` show only a cover slide
-and a truncated caption; the logged-in browser shows everything.
+Everything is captured by the skill's own script, `ig_capture.py`, which drives
+the real Chrome on a clone of the Chrome profile signed into the dedicated
+research Instagram account that follows the target coaches. The agent itself
+has **no browser** (the `browser` toolset is disabled), so the script is the
+only capture path. Instagram's public web and `web_extract` show only a cover
+slide and a truncated caption; the logged-in profile shows everything.
 
 **Read-only, always.** This skill never likes, follows, comments, messages,
 saves, or changes anything on Instagram, never logs in or answers a 2FA
@@ -26,11 +27,12 @@ challenge, and never writes to the KB on its own.
 
 ## Preconditions (check, don't assume)
 
-1. `browser_navigate` to `https://www.instagram.com/<handle>/` then
-   `browser_snapshot`. A logged-in view shows **Following/Follow + Message**
-   buttons and the post grid. A login wall, "Log in to continue", or a
-   challenge/captcha page ⇒ **stop and report** — do not attempt to log in.
-   the operator fixes the profile themselves (quit Chrome on the box, re-login, retry).
+1. Login is checked by the script itself: it refuses to start when the profile
+   clone carries no Instagram session cookie, and it exits 2 with `login_wall`
+   (or `rate_limited`) when Instagram shows a login wall or challenge ⇒ **stop
+   and report** — never attempt to log in. The operator fixes the profile
+   themselves (quit Chrome on the box, re-login in the research Chrome profile,
+   retry with `--rebuild-profile`).
 2. Scope from the operator (ask once, via `clarify` if anything is missing): the
    handles, the window (default **12 months**, 6 months is the acceptable
    floor).
@@ -44,7 +46,7 @@ python ~/.hermes/skills/productivity/instagram-coach-research/scripts/ig_capture
 ```
 (`capture` and `transcribe` also run separately; `--rebuild-profile` re-clones the login.)
 What it does: launches the real Chrome binary headless on a **clone of the research
-account's Chrome profile** (Hermes's own real-profile flag set + Glic disabled), attaches
+account's Chrome profile** (real-profile launch flags with Glic disabled, carried in the script), attaches
 Playwright over CDP, opens the profile page and scrolls — Instagram's grid feed
 (`PolarisProfilePostsQuery` / `…TabContentQuery_connection`, 12 posts a page) carries
 every post object: code, timestamp, type, full caption, and **every carousel slide's
@@ -66,14 +68,8 @@ Check: oldest date ≤ the window start (or the run said `grid_exhausted`), and
 `carousels_without_slide_text` is empty (re-run `transcribe` for stragglers; a slide
 that failed twice carries an `error` field — mention it, don't fake text).
 
-### 2b. Fallback only — browser tools by hand
-
-If the script cannot run (Playwright gone, Chrome moved), the built-in browser tools can
-do the same job one post at a time: `browser_navigate` the profile → collect post links →
-per post read date/caption, step carousels with `browser_click` Next + `browser_get_images`,
-transcribe each slide URL with `vision_analyze` (**never `browser_vision`** — the headless
-snapshot cannot screenshot), `ig_ledger.py add` after every post, one failure = one post
-skipped with `notes`. Expect ~7 min per carousel; use it for a handful of posts, not a year.
+If the script cannot run (Playwright gone, Chrome moved), **stop and report** —
+there is no hand-browsing fallback.
 
 ### 3. Report before synthesis
 
@@ -106,9 +102,9 @@ stay on disk, not in the KB.
 
 1. Read-only on Instagram: no follows, likes, comments, saves, DMs, no profile
    or settings pages. The research account exists only to view.
-   Enforced in software too: the `social-readonly` plugin vetoes browser_click /
-   browser_type / browser_press / browser_dialog / browser_vault / JS eval on social hosts, and browser_cdp / browser_exec everywhere (fail-closed) — a block
-   there is the guard working, not a bug to route around.
+   Enforced in software too: the agent has no browser toolset, and the
+   `social-readonly` plugin blocks `browser_exec` / `browser_cdp` everywhere as a
+   fail-closed backstop — a block there is the guard working, not a bug to route around.
 2. Never log in, never enter a code, never bypass a challenge. Stop and tell the operator.
 3. No reel video — caption text only.
 4. Stop on any rate-limit / "try again later" signal; report what was captured.

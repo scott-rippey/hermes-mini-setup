@@ -29,11 +29,10 @@ Enable/disable = the **`skills.disabled` list in `config.yaml`** + a gateway res
 | scrapling | official | Hard-page fallback to the built-in web tools (whose Firecrawl backend is wired in Phase 3 — see [web-research.md](web-research.md)) |
 | maps | bundled | OSM geocode/route — keyless; powers the travel fallback + live "route me from anywhere" asks |
 | grounded-citations | bundled (since platform v0.20) | Perplexity-style numbered citations — a ledger script owns the url→[n] mapping so citation numbers come from retrieval, never model memory; verbatim-quote fact-check chain for high-stakes claims. Fires for any sourced claim; the research persona is the main consumer |
-| docx | bundled (Anthropic, since platform v0.19) | Create/read/edit Word docs & templates — ad-hoc "fix this client doc" asks alongside deliverable-export's md→DOCX lane. Scripts run from their own dir (the `office` module resolves local imports that way) |
+| microsoft-office | bundled (since platform v0.23; replaces the old `docx`/`xlsx`/`powerpoint` skills) | Word, Excel and PowerPoint in one skill — ad-hoc "fix this client doc", spreadsheet and deck asks alongside deliverable-export's md→DOCX lane. Needs python-docx / openpyxl / python-pptx from the `agent-deps` plugin. On a box upgraded from v0.22, disable the old `docx`/`xlsx` copies (they stay on disk) |
 | pdf | bundled (Anthropic, since platform v0.19) | Create/merge/split/**fill forms**/secure PDFs (pypdf + pdfplumber + pdf2image; needs poppler on PATH) |
-| xlsx | bundled (Anthropic, since platform v0.19) | Create/read/edit Excel/CSV — the build's only spreadsheet capability (openpyxl + a formula-recalc script) |
 
-**Doc-trio and scrapling packages are NOT bundled** — declare them in the `agent-deps` plugin ([templates/plugins/agent-deps/](../templates/plugins/agent-deps/)) and `hermes plugins enable agent-deps`; never `pip install` into Hermes's environment, which v0.22 rebuilds on every update. `brew install poppler` if `pdftoppm` is missing. Smoke-test each before relying on them.
+**Document-skill and scrapling packages are NOT bundled** — declare them in the `agent-deps` plugin ([templates/plugins/agent-deps/](../templates/plugins/agent-deps/)) and `hermes plugins enable agent-deps`; never `pip install` into Hermes's environment, which v0.22 rebuilds on every update. `brew install poppler` if `pdftoppm` is missing. Smoke-test each before relying on them.
 
 ## The patch ledger (keep one; this is yours pre-filled)
 

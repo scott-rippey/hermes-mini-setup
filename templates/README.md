@@ -27,7 +27,7 @@ Every `{{PLACEHOLDER}}` used across `templates/`, and where its value comes from
 Templates without placeholders (install as-is):
 - `bin/python.template` → `~/.local/bin/python`, `bin/scrapling.template` → `~/.local/bin/scrapling` (Hermes v0.22+; both find Hermes's own Python through `~/.local/bin/hermes`, so they survive every update).
 - `plugins/agent-deps/` → `~/.hermes/plugins/agent-deps/` (Hermes v0.22+; `{{OPERATOR_NAME}}` in its `plugin.yaml`) — the Python packages our scripts and skills need, declared so the package manager keeps them across updates.
-- `plugins/social-readonly/` → `~/.hermes/plugins/social-readonly/` (only when real-profile browsing is used).
+- `plugins/social-readonly/` → `~/.hermes/plugins/social-readonly/` (always — a fail-closed backstop that refuses `browser_exec`/`browser_cdp`; see docs/security.md).
 
 Rules the installer must keep:
 1. Instantiate → smoke-test by hand → wire → verify → only then schedule.

@@ -42,7 +42,7 @@ REAL_CHROME_DIR = HOME / "Library/Application Support/Google/Chrome"
 SOURCE_PROFILE = os.environ.get("IG_SOURCE_PROFILE", "Profile 1")   # the Chrome profile signed into the research account
 CLONE = HOME / "{{AGENT_SLUG}}-outputs/ig-research/.chrome-profile"
 AUTH_FILES = ["Cookies", "Login Data", "Login Data For Account", "Web Data", "Preferences", "Secure Preferences"]
-# Hermes's real-profile launch flags (tools/browser_tool_real_profile.py) + the Glic patch.
+# Real-profile launch flags (originally Hermes's own set) with Gemini-in-Chrome (Glic) disabled — carried here, not in Hermes.
 FLAGS = ["--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
          "--disable-background-networking", "--disable-component-update", "--disable-default-apps",
          "--disable-hang-monitor", "--disable-popup-blocking", "--disable-prompt-on-repost",
