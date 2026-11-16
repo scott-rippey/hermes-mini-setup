@@ -28,6 +28,7 @@ Templates without placeholders (install as-is):
 - `bin/python.template` → `~/.local/bin/python`, `bin/scrapling.template` → `~/.local/bin/scrapling` (Hermes v0.22+; both find Hermes's own Python through `~/.local/bin/hermes`, so they survive every update).
 - `plugins/agent-deps/` → `~/.hermes/plugins/agent-deps/` (Hermes v0.22+; `{{OPERATOR_NAME}}` in its `plugin.yaml`) — the Python packages our scripts and skills need, declared so the package manager keeps them across updates.
 - `plugins/social-readonly/` → `~/.hermes/plugins/social-readonly/` (always — a fail-closed backstop that refuses `browser_exec`/`browser_cdp`; see docs/security.md).
+- `plugins/no-skill-create/` → `~/.hermes/plugins/no-skill-create/` (always — the agent may never create a skill or write skill files with file tools; see docs/security.md).
 
 Rules the installer must keep:
 1. Instantiate → smoke-test by hand → wire → verify → only then schedule.

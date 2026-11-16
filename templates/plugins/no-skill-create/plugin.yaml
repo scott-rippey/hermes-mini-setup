@@ -1,0 +1,4 @@
+name: no-skill-create
+version: "1.0"
+description: Hard guard — the agent may never create a skill, and may change skill files only through skill_manage (which stages every edit for approval)
+author: {{OPERATOR_NAME}}
