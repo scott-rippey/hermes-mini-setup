@@ -1,0 +1,4 @@
+name: skills-readonly
+version: "1.0"
+description: Hard guard — skills are read-only to the agent; it can't create, edit or delete a skill (skill_manage) or write skill files with file tools
+author: {{OPERATOR_NAME}}
